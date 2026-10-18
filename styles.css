@@ -98,6 +98,9 @@
 	border-radius: 999px;
 	background: var(--background-modifier-border);
 	font-size: var(--font-ui-smaller);
+	line-height: 1.5;
+	/* A chip is one label: "46 q" broken over two lines read as two chips. */
+	white-space: nowrap;
 }
 .rl-chip-dim { color: var(--text-faint); }
 
@@ -117,6 +120,8 @@
 .rl-crumb { flex: 1; color: var(--text-muted); font-size: var(--font-ui-smaller); }
 .rl-count { font-variant-numeric: tabular-nums; color: var(--text-muted); }
 .rl-sessionbar .rl-progress { flex-basis: 100%; }
+/* Links in the bar sit on its line, at one size: Recall first and End exam. */
+.rl-sessionbar .rl-link { margin-top: 0; font-size: var(--font-ui-smaller); }
 
 .rl-question { padding-top: 0.5rem; }
 .rl-qmeta { margin-bottom: 0.5rem; }
@@ -391,6 +396,10 @@
 .rl-main { flex: 1; min-width: 0; padding: 1.1rem 1.5rem 4rem; overflow-y: auto; }
 .rl-head { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; margin-bottom: 0.9rem; }
 .rl-head h2 { margin: 0; flex: 1; }
+/* Links in a page heading sit on the title's line; "← back" is quiet until hovered. */
+.rl-head .rl-link { margin-top: 0; }
+.rl-head > a.rl-link:first-child { color: var(--text-muted); text-decoration: none; font-size: var(--font-ui-small); white-space: nowrap; }
+.rl-head > a.rl-link:first-child:hover { color: var(--text-accent); text-decoration: underline; }
 .rl-muted { color: var(--text-muted); font-size: var(--font-ui-smaller); }
 
 .rl-panel {
@@ -409,13 +418,24 @@
 
 .rl-note-row {
 	display: flex; align-items: center; gap: 0.6rem;
+	/* Wraps only to put the note's labs on a line of their own. */
+	flex-wrap: wrap;
 	padding: 0.45rem 0; border-top: 1px solid var(--background-modifier-border);
 }
-.rl-note-row:first-of-type { border-top: none; }
+.rl-note-row:first-of-type, .rl-note-group + .rl-note-row { border-top: none; }
 .rl-note-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 0.35rem; }
-.rl-note-name .rl-link { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-note-name .rl-link { margin-top: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rl-note-done { color: var(--color-green); display: flex; }
-.rl-note-actions { display: flex; align-items: center; gap: 0.4rem; }
+.rl-note-actions { display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0; }
+/* Chips in a row are centred on it, never squeezed or wrapped. */
+.rl-note-row .rl-chip { margin: 0; flex-shrink: 0; }
+/* The question count has a fixed width, so the buttons line up from row to row. */
+.rl-note-actions .rl-chip { min-width: 3.6em; text-align: center; font-variant-numeric: tabular-nums; }
+.rl-note-group {
+	margin: 1rem 0 0.1rem; padding-bottom: 0.2rem;
+	font-size: var(--font-ui-smaller); font-weight: 600; color: var(--text-muted);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
 
 /* ---------- history ---------- */
 
@@ -543,12 +563,15 @@
 
 /* ---------- labs ---------- */
 
-.rl-note-labs { flex-basis: 100%; margin: 0.25rem 0 0 1.3rem; }
-.rl-lab-chip { cursor: pointer; }
+.rl-note-labs { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; margin: 0.1rem 0; }
+.rl-note-labs-icon { display: flex; color: var(--text-faint); }
+.rl-note-labs-icon svg { width: 14px; height: 14px; }
+/* Outlined in the tier's colour: a coloured left border on a pill showed as a stray "(". */
+.rl-lab-chip { cursor: pointer; background: transparent; border: 1px solid var(--rl-tier-color, var(--background-modifier-border)); }
 .rl-lab-chip:hover { background: var(--background-modifier-hover); }
-.rl-tier-dot-easy   { border-left: 3px solid var(--color-green); }
-.rl-tier-dot-hard   { border-left: 3px solid var(--color-orange); }
-.rl-tier-dot-brutal { border-left: 3px solid var(--color-red); }
+.rl-tier-dot-easy   { --rl-tier-color: var(--color-green); }
+.rl-tier-dot-hard   { --rl-tier-color: var(--color-orange); }
+.rl-tier-dot-brutal { --rl-tier-color: var(--color-red); }
 
 .rl-lab-solved {
 	display: flex; align-items: center; gap: 0.5rem;
@@ -684,3 +707,6 @@
 
 /* The view is focusable only to keep exam shortcuts working after a click. */
 .recall-lab:focus { outline: none; }
+
+/* Under the flag box: wrong flags so far, then each new verdict. */
+.rl-flag-verdict { margin-top: 0.4rem; }

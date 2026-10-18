@@ -1098,7 +1098,7 @@ export class RecallLabView extends ItemView {
 				.setButtonText("Set up this course")
 				.setCta()
 				.onClick(() => void this.plugin.requestCourseSetup(folder));
-			this.renderNoteList(main, folder, [], progress);
+			this.renderNoteList(main, folder, [], progress, false);
 			return;
 		}
 
@@ -1179,7 +1179,7 @@ export class RecallLabView extends ItemView {
 		}
 
 		this.renderLabPanel(main, folder, progress);
-		this.renderNoteList(main, folder, courseBanks, progress);
+		this.renderNoteList(main, folder, courseBanks, progress, true);
 	}
 
 	/** All of a course's labs in one place, with their state. */
@@ -1233,12 +1233,28 @@ export class RecallLabView extends ItemView {
 		}
 	}
 
-	private renderNoteList(main: HTMLElement, folder: string, courseBanks: Bank[], progress: { completed?: Record<string, string> }): void {
+	private renderNoteList(
+		main: HTMLElement, folder: string, courseBanks: Bank[], progress: { completed?: Record<string, string> }, isCourse: boolean
+	): void {
 		const notes = this.plugin.store.notesIn(folder);
 		const panel = main.createDiv({ cls: "rl-panel" });
 		panel.createEl("h3", { text: `Notes (${notes.length})` });
 
+		// A course spread over subfolders reads as one long list of 01, 02, 03…
+		// restarting in every module; each module gets a heading instead.
+		const root = folder.replace(/\/+$/, "") + "/";
+		const groupOf = (path: string) => {
+			const rel = path.slice(root.length);
+			return rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
+		};
+		const grouped = new Set(notes.map(groupOf)).size > 1;
+		let group: string | null = null;
+
 		for (const path of notes) {
+			if (grouped && groupOf(path) !== group) {
+				group = groupOf(path);
+				panel.createDiv({ cls: "rl-note-group", text: group ? group.split("/").join(" › ") : "In this folder" });
+			}
 			const bank = courseBanks.find((b) => b.note === path);
 			const row = panel.createDiv({ cls: "rl-note-row" });
 			row.setAttribute("data-path", path);
@@ -1251,16 +1267,6 @@ export class RecallLabView extends ItemView {
 			const highlights = this.highlightBanks.find((b) => b.note === path)?.questions.length ?? 0;
 			if (highlights) {
 				name.createSpan({ cls: "rl-chip rl-chip-dim", text: `${highlights} highlight${highlights === 1 ? "" : "s"}` });
-			}
-
-			const labs = this.allLabs.filter((l) => l.note === path);
-			if (labs.length) {
-				const chip = row.createDiv({ cls: "rl-note-labs" });
-				for (const lab of labs) {
-					const tag = chip.createSpan({ cls: `rl-chip rl-lab-chip rl-tier-dot-${lab.tier}` });
-					tag.setText(`🧪 ${lab.title}`);
-					tag.onclick = () => { this.openLab = lab; this.screen = "lab"; void this.render(); };
-				}
 			}
 
 			const right = row.createDiv({ cls: "rl-note-actions" });
@@ -1289,10 +1295,22 @@ export class RecallLabView extends ItemView {
 						await this.plugin.requestNoteQuiz(path);
 						if (!this.occupied) await this.revealNote(path);
 					});
-			} else {
+			} else if (isCourse) {
 				right.createSpan({ cls: "rl-chip rl-chip-dim", text: "no quiz" });
 				new ButtonComponent(right).setButtonText("Generate")
 					.onClick(() => void this.plugin.requestNoteQuiz(path));
+			}
+
+			// The note's labs, on a line of their own under its name.
+			const labs = this.allLabs.filter((l) => l.note === path);
+			if (labs.length) {
+				const strip = row.createDiv({ cls: "rl-note-labs" });
+				setIcon(strip.createSpan({ cls: "rl-note-labs-icon", attr: { "aria-label": "Labs" } }), "flask-conical");
+				for (const lab of labs) {
+					const tag = strip.createSpan({ cls: `rl-chip rl-lab-chip rl-tier-dot-${lab.tier}`, text: lab.title });
+					tag.setAttr("aria-label", `${tierLabel(lab.tier)} lab`);
+					tag.onclick = () => { this.openLab = lab; this.screen = "lab"; void this.render(); };
+				}
 			}
 		}
 		if (!notes.length) panel.createDiv({ cls: "rl-muted", text: "No notes in this folder." });
@@ -2059,6 +2077,15 @@ export class RecallLabView extends ItemView {
 			settle();
 			await this.submitting;
 		}
+		// Ended before answering anything: there is nothing to grade, and an F
+		// for it would only drag the history down.
+		if (!this.answers.length) {
+			this.screen = "home";
+			this.examItems = [];
+			new Notice("Nothing was answered, so nothing was saved.");
+			await this.render();
+			return;
+		}
 		const graded = this.answers.filter((a) => a.attempt).map((a) => a.attempt!);
 		// A marking that failed says nothing about what you know.
 		const marked = graded.filter(counts);
@@ -2273,35 +2300,6 @@ export class RecallLabView extends ItemView {
 			pre.createEl("code", { text: f.content });
 		}
 
-		// Optional: put it on disk, for anyone who wants to compile or run it.
-		const wsPanel = main.createDiv({ cls: "rl-panel" });
-		const wsHead = wsPanel.createDiv({ cls: "rl-panel-head" });
-		wsHead.createEl("h3", { text: "Optional: work on it locally" });
-		const onDisk = this.plugin.labs.exists(lab);
-		wsPanel.createDiv({
-			cls: "rl-muted",
-			text: "You do not need this — the challenge above can be solved by reading. Write the file out only if you want to compile or run it yourself.",
-		});
-		wsPanel.createEl("pre", { cls: "rl-code" }).createEl("code", { text: this.plugin.labs.dir(lab) });
-		if (lab.setup.trim()) {
-			const setup = wsPanel.createDiv({ cls: "rl-model" });
-			setup.createDiv({ cls: "rl-model-label", text: "Then, if you want to run it" });
-			setup.createEl("pre", { cls: "rl-code" }).createEl("code", { text: lab.setup.trim() });
-		}
-		new ButtonComponent(wsPanel.createDiv({ cls: "rl-actions" }))
-			.setButtonText(onDisk ? "Re-write the file" : "Write the file to disk")
-			.onClick(() => {
-				try {
-					const where = this.plugin.labs.materialise(lab);
-					this.plugin.log.info("lab workspace written", { lab: lab.id, dir: where, files: lab.files.length });
-					new Notice(`Written to ${where}`, 9000);
-					void this.render();
-				} catch (e) {
-					this.plugin.log.error("lab setup failed", { lab: lab.id, error: String(e) });
-					new Notice(`Could not write the file: ${String(e)}`, 12000);
-				}
-			});
-
 		// Flag
 		const flagPanel = main.createDiv({ cls: "rl-panel" });
 		flagPanel.createEl("h3", { text: "Submit the flag" });
@@ -2309,7 +2307,11 @@ export class RecallLabView extends ItemView {
 			type: "text", cls: "rl-text rl-mono",
 			attr: { placeholder: lab.flagFormat, spellcheck: "false" },
 		});
-		const verdict = flagPanel.createDiv();
+		const verdict = flagPanel.createDiv({ cls: "rl-flag-verdict" });
+		if (prog.attempts && !prog.solvedAt) {
+			verdict.addClass("rl-muted");
+			verdict.setText(`${prog.attempts} wrong so far.`);
+		}
 		const submit = async () => {
 			const value = input.value;
 			if (!value.trim()) return;
@@ -2323,6 +2325,7 @@ export class RecallLabView extends ItemView {
 				await this.plugin.store.saveLabProgress(prog);
 				this.plugin.log.info("wrong flag", { lab: lab.id, attempts: prog.attempts, submitted: value.slice(0, 60) });
 				verdict.empty();
+				verdict.removeClass("rl-muted");
 				verdict.addClass("rl-flag-wrong");
 				verdict.setText(`Not the flag. ${prog.attempts} wrong so far.`);
 				input.addClass("rl-shake");
@@ -2364,6 +2367,35 @@ export class RecallLabView extends ItemView {
 			}
 		}
 
+		// Optional: put it on disk, for anyone who wants to compile or run it.
+		const wsPanel = main.createDiv({ cls: "rl-panel" });
+		const wsHead = wsPanel.createDiv({ cls: "rl-panel-head" });
+		wsHead.createEl("h3", { text: "Optional: work on it locally" });
+		const onDisk = this.plugin.labs.exists(lab);
+		wsPanel.createDiv({
+			cls: "rl-muted",
+			text: "You do not need this — the challenge above can be solved by reading. Write the file out only if you want to compile or run it yourself.",
+		});
+		wsPanel.createEl("pre", { cls: "rl-code" }).createEl("code", { text: this.plugin.labs.dir(lab) });
+		if (lab.setup.trim()) {
+			const setup = wsPanel.createDiv({ cls: "rl-model" });
+			setup.createDiv({ cls: "rl-model-label", text: "Commands" });
+			setup.createEl("pre", { cls: "rl-code" }).createEl("code", { text: lab.setup.trim() });
+		}
+		new ButtonComponent(wsPanel.createDiv({ cls: "rl-actions" }))
+			.setButtonText(onDisk ? "Re-write the file" : "Write the file to disk")
+			.onClick(() => {
+				try {
+					const where = this.plugin.labs.materialise(lab);
+					this.plugin.log.info("lab workspace written", { lab: lab.id, dir: where, files: lab.files.length });
+					new Notice(`Written to ${where}`, 9000);
+					void this.render();
+				} catch (e) {
+					this.plugin.log.error("lab setup failed", { lab: lab.id, error: String(e) });
+					new Notice(`Could not write the file: ${String(e)}`, 12000);
+				}
+			});
+
 		// Solution, only once it can no longer be cheated with
 		if (prog.solvedAt || prog.gaveUpAt) {
 			const sol = main.createDiv({ cls: "rl-panel" });
@@ -2390,7 +2422,9 @@ export class RecallLabView extends ItemView {
 		head.createEl("h2", { text: "History" });
 		this.renderClaudeStatus(head);
 
-		if (!progress.sessions.length) {
+		// Sessions ended before any answer (saved by earlier versions) say nothing.
+		const sessions = progress.sessions.filter((s) => s.asked > 0);
+		if (!sessions.length) {
 			main.createDiv({ cls: "rl-empty", text: "No exams taken yet." });
 			return;
 		}
@@ -2401,8 +2435,8 @@ export class RecallLabView extends ItemView {
 			s.createDiv({ cls: "rl-stat-value", text: value });
 			s.createDiv({ cls: "rl-stat-label", text: label });
 		};
-		const mean = Math.round(progress.sessions.reduce((s, x) => s + x.meanScore, 0) / progress.sessions.length);
-		stat("Sessions", String(progress.sessions.length));
+		const mean = Math.round(sessions.reduce((s, x) => s + x.meanScore, 0) / sessions.length);
+		stat("Sessions", String(sessions.length));
 		const marked = progress.attempts.filter(counts);
 		stat("Questions answered", String(marked.length));
 		stat("Mean score", `${mean}%`);
@@ -2436,13 +2470,18 @@ export class RecallLabView extends ItemView {
 
 		const panel = main.createDiv({ cls: "rl-panel" });
 		panel.createEl("h3", { text: "Every exam" });
-		for (const s of progress.sessions.slice().reverse()) {
+		for (const s of sessions.slice().reverse()) {
 			const row = panel.createDiv({ cls: "rl-session" });
 			const top = row.createDiv({ cls: "rl-session-top" });
 			top.createSpan({ cls: "rl-session-grade", text: s.grade });
 			const mid = top.createDiv({ cls: "rl-session-mid" });
-			mid.createDiv({ cls: "rl-session-title", text: s.bankTitle ?? s.bankId });
-			mid.createDiv({ cls: "rl-session-meta", text: `${new Date(s.ts).toLocaleString()} · ${s.asked} questions · ${s.meanScore}%` });
+			// Older sessions kept only the quiz's id; show its title when the quiz is still here.
+			const title = s.bankTitle ?? this.banks.find((b) => b.id === s.bankId)?.title ?? s.bankId;
+			mid.createDiv({ cls: "rl-session-title", text: title });
+			mid.createDiv({
+				cls: "rl-session-meta",
+				text: `${new Date(s.ts).toLocaleString()} · ${s.asked} question${s.asked === 1 ? "" : "s"} · ${s.meanScore}%`,
+			});
 			if (s.coaching) {
 				const toggle = top.createEl("a", { cls: "rl-link", text: "Feedback" });
 				const body = row.createDiv({ cls: "rl-session-coaching rl-collapsed" });
