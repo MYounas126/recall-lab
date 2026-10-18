@@ -26,6 +26,8 @@ export interface RecallLabSettings {
 	targetRecall: number;
 	/** Questions you have never answered that a day's reviews may introduce. */
 	newPerDay: number;
+	/** Memory dots on headings, the memory line in note footers, and the status-bar due count. */
+	memoryMap: boolean;
 }
 
 export const DEFAULT_SETTINGS: RecallLabSettings = {
@@ -43,6 +45,7 @@ export const DEFAULT_SETTINGS: RecallLabSettings = {
 	defaultLength: 15,
 	targetRecall: 90,
 	newPerDay: 20,
+	memoryMap: true,
 };
 
 export class RecallLabSettingTab extends PluginSettingTab {
@@ -164,6 +167,20 @@ export class RecallLabSettingTab extends PluginSettingTab {
 						this.plugin.settings.newPerDay = v;
 						await this.plugin.saveSettings();
 					})
+			);
+
+		new Setting(containerEl)
+			.setName("Memory map on notes")
+			.setDesc(
+				"A green, amber or red dot beside each heading in reading view showing how well you remember that " +
+					"section, a memory line in each note's footer, and today's due count in the status bar."
+			)
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.memoryMap).onChange(async (v) => {
+					this.plugin.settings.memoryMap = v;
+					await this.plugin.saveSettings();
+					await this.plugin.refreshMemoryViews();
+				})
 			);
 
 		new Setting(containerEl).setName("Progression").setHeading();

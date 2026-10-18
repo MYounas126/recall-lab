@@ -399,7 +399,21 @@ export class RecallLabView extends ItemView {
 	/** Starts today's review: across every course, or one course. */
 	async startReview(course?: Course): Promise<void> {
 		await this.refresh();
-		const banks = course ? Store.banksForCourse(course, this.banks) : this.banks;
+		await this.review(
+			course ? Store.banksForCourse(course, this.banks) : this.banks,
+			course ? `review:${course.id}` : "review",
+			course ? `Review · ${course.title}` : "Daily review"
+		);
+	}
+
+	/** Reviews one note: what is due in it, then its share of today's new questions. */
+	async startNoteReview(path: string): Promise<void> {
+		await this.refresh();
+		const name = path.split("/").pop()!.replace(/\.md$/, "");
+		await this.review(this.banks.filter((b) => b.note === path), `review:${path}`, `Review · ${name}`);
+	}
+
+	private async review(banks: Bank[], id: string, title: string): Promise<void> {
 		const { plan, memory, keys } = await this.planFor(banks);
 		const items = [...plan.due, ...plan.fresh];
 		if (!items.length) {
@@ -408,12 +422,7 @@ export class RecallLabView extends ItemView {
 			new Notice(next ? `Nothing to review. The next question is due ${describeWhen(next, now)}.` : "Nothing to review yet.");
 			return;
 		}
-		const paper: Bank = {
-			id: course ? `review:${course.id}` : "review",
-			title: course ? `Review · ${course.title}` : "Daily review",
-			questions: [],
-		};
-		await this.launch(paper, items, "review");
+		await this.launch({ id, title, questions: [] }, items, "review");
 	}
 
 	private renderLegend(panel: HTMLElement, scores: AxisScore[], onClick?: (id: string) => void): void {
@@ -1006,6 +1015,7 @@ export class RecallLabView extends ItemView {
 
 		this.screen = "results";
 		await this.render();
+		void this.plugin.refreshMemoryViews();
 
 		// An exam's coaching is fetched right away and dropped into the panel
 		// when it lands. A review stays offline; its feedback is one click away.
