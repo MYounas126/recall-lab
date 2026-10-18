@@ -128,10 +128,13 @@ ramps through all three — about 45% easy, 35% hard and 20% brutal — and with
 each tier asks unseen questions first, then your weakest, then the ones you
 have not seen for longest.
 
-Mastery counts unanswered questions as zero, so a radar spoke answers *how
-much of this area do I own*, not *how did I do on the three I tried*. A
-question's mastery is the mean of its last three scores, so one lucky guess
-does not erase a history of getting it wrong.
+The radar shows, for each skill area, the score you would expect if asked
+right now: how well you have answered its questions (each question's mean over
+its last three scores, so one lucky guess does not erase a history of getting
+it wrong) times how likely you are to still remember them. Questions never
+answered count as zero, so a spoke answers *how much of this area do I own*,
+not *how did I do on the three I tried*. Spokes fade between reviews; a dashed
+outline shows where the radar stood a week ago.
 
 ## Bank format
 

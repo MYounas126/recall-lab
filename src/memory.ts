@@ -1,5 +1,6 @@
 import { createEmptyCard, fsrs, Rating, type Card, type FSRS, type Grade } from "ts-fsrs";
 import { Attempt, DayLog, ExamItem, Tier, qkey } from "./types";
+import { AnswerIndex } from "./history";
 
 const DAY = 86_400_000;
 
@@ -184,6 +185,26 @@ export class Memory {
 		}
 		return out;
 	}
+}
+
+/**
+ * A question's score for the radar: the score you would expect if asked at
+ * `at`, i.e. how well you have answered it (the mean of your last three
+ * scores) times how likely you are to still recall it. Recall alone reads
+ * 100% the moment you answer, even wrongly, because you have just seen the
+ * answer; weighting by your scores keeps a miss from looking like knowledge,
+ * and the recall factor makes an area fade between reviews. Null if the
+ * question had not been answered by then.
+ */
+export function expectedScore(attempts: Attempt[], retention: number, at: Date): (bankId: string, questionId: string) => number | null {
+	const then = attempts.filter((a) => Date.parse(a.ts) <= at.getTime());
+	const memory = new Memory(then, retention);
+	const index = new AnswerIndex(then);
+	return (bankId, questionId) => {
+		const recall = memory.recall(qkey(bankId, questionId), at);
+		const mastery = index.mastery(bankId, questionId);
+		return recall === null || mastery === null ? null : mastery * recall;
+	};
 }
 
 /** The keys of every question in these items. */

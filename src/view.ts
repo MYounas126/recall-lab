@@ -3,10 +3,13 @@ import type RecallLabPlugin from "./main";
 import { Store } from "./store";
 import { gradeLocally } from "./grader";
 import { shuffled } from "./util";
-import { renderRadar, scoreAxes, scoreCourses, weakestTested, untested, AxisScore } from "./radar";
+import { QuestionScore, renderRadar, scoreAxes, scoreCourses, weakestTested, untested, withBefore, AxisScore } from "./radar";
 import { Attempt, Bank, Confidence, Course, ExamItem, Lab, LabProgress, ProgressFile, Question, SessionSummary, Tier, labScore, letterGrade } from "./types";
 import { AnswerIndex, calibration } from "./history";
-import { DayRecord, Memory, ReviewPlan, counts, describeWhen, endOfDay, keysOf, planReview, settledRecord, startOfDay, streakOf } from "./memory";
+import {
+	DayRecord, Memory, ReviewPlan, counts, describeWhen, endOfDay, expectedScore, keysOf, planReview, settledRecord, startOfDay,
+	streakOf,
+} from "./memory";
 import { keyAction } from "./keys";
 import { checkFlag } from "./labs";
 import { INSTALL_HINT } from "./claude";
@@ -269,8 +272,12 @@ export class RecallLabView extends ItemView {
 		await this.renderReviewPanel(main, this.banks);
 
 		// The central radar: one spoke per course, across the whole vault.
-		const index = new AnswerIndex(progress.attempts);
-		const scores = scoreCourses(this.courses, (c) => Store.banksForCourse(c, this.banks), index);
+		const expected = this.expectedScores(progress.attempts);
+		const banksFor = (c: Course) => Store.banksForCourse(c, this.banks);
+		const scores = withBefore(
+			scoreCourses(this.courses, banksFor, expected.now),
+			scoreCourses(this.courses, banksFor, expected.weekAgo)
+		);
 		const overall = scores.length ? Math.round(scores.reduce((s, a) => s + a.score, 0) / scores.length) : 0;
 
 		const panel = main.createDiv({ cls: "rl-panel rl-panel-hero" });
@@ -279,6 +286,7 @@ export class RecallLabView extends ItemView {
 		ph.createSpan({ cls: "rl-grade-pill", text: `${overall}% · ${letterGrade(overall)}` });
 		if (scores.length >= 3) {
 			renderRadar(panel.createDiv({ cls: "rl-radar-wrap" }), scores);
+			this.renderRadarCaption(panel);
 		} else {
 			panel.createDiv({ cls: "rl-muted", text: `A radar needs three courses; you have ${scores.length}. Set up more folders and it appears here.` });
 		}
@@ -293,7 +301,7 @@ export class RecallLabView extends ItemView {
 			const card = main.createDiv({ cls: "rl-panel" });
 			const ch = card.createDiv({ cls: "rl-panel-head" });
 			ch.createEl("h3", { text: course.title });
-			const inner = scoreAxes(course, courseBanks, index);
+			const inner = scoreAxes(course, courseBanks, expected.now);
 			const cm = inner.filter((a) => a.total).length
 				? Math.round(inner.filter((a) => a.total).reduce((s, a) => s + a.score, 0) / inner.filter((a) => a.total).length)
 				: 0;
@@ -304,6 +312,24 @@ export class RecallLabView extends ItemView {
 				.setCta()
 				.onClick(() => { this.selectedFolder = course.folder; this.screen = "folder"; void this.render(); });
 		}
+	}
+
+	/** Radar scores: what you would expect to score if asked now, and a week ago. */
+	private expectedScores(attempts: Attempt[]): { now: QuestionScore; weekAgo: QuestionScore } {
+		const retention = this.plugin.settings.targetRecall / 100;
+		const now = new Date();
+		return {
+			now: expectedScore(attempts, retention, now),
+			weekAgo: expectedScore(attempts, retention, new Date(now.getTime() - 7 * 86_400_000)),
+		};
+	}
+
+	private renderRadarCaption(panel: HTMLElement): void {
+		panel.createDiv({
+			cls: "rl-radar-caption",
+			text: "Each spoke is the score you would expect if asked right now: how well you have answered, " +
+				"times how likely you still remember. It fades between reviews. Dashed: a week ago.",
+		});
 	}
 
 	/** Today's review over these banks, with every question's memory state. */
@@ -458,7 +484,11 @@ export class RecallLabView extends ItemView {
 		}
 
 		const courseBanks = Store.banksForCourse(course, this.banks);
-		const scores = scoreAxes(course, courseBanks, new AnswerIndex(progress.attempts));
+		const expected = this.expectedScores(progress.attempts);
+		const scores = withBefore(
+			scoreAxes(course, courseBanks, expected.now),
+			scoreAxes(course, courseBanks, expected.weekAgo)
+		);
 		const tested = scores.filter((a) => a.total > 0 && a.seen > 0);
 		const overall = tested.length ? Math.round(tested.reduce((s, a) => s + a.score, 0) / tested.length) : 0;
 
@@ -468,13 +498,14 @@ export class RecallLabView extends ItemView {
 		ph.createEl("h3", { text: "Skill radar" });
 		ph.createSpan({ cls: "rl-grade-pill", text: `${overall}% · ${letterGrade(overall)}` });
 		renderRadar(panel.createDiv({ cls: "rl-radar-wrap" }), scores);
+		this.renderRadarCaption(panel);
 		this.renderLegend(panel, scores);
 		const weakest = weakestTested(scores);
 		const notYet = untested(scores);
 		if (weakest) {
 			panel.createDiv({
 				cls: "rl-radar-note",
-				text: `Weakest tested area: ${weakest.axis.label} at ${weakest.score}%. That is where the next exam should go.`,
+				text: `Weakest right now: ${weakest.axis.label} at ${weakest.score}%. That is where to practise next.`,
 			});
 		}
 		if (notYet.length) {
@@ -970,7 +1001,7 @@ export class RecallLabView extends ItemView {
 		let axes: AxisScore[] = [];
 		if (course) {
 			const progress = await this.plugin.store.readProgress();
-			axes = scoreAxes(course, Store.banksForCourse(course, this.banks), new AnswerIndex(progress.attempts));
+			axes = scoreAxes(course, Store.banksForCourse(course, this.banks), this.expectedScores(progress.attempts).now);
 		}
 
 		this.screen = "results";

@@ -2,8 +2,8 @@ import { test } from "node:test";
 import { strict as assert } from "node:assert";
 import { Rating } from "ts-fsrs";
 import {
-	Memory, Pace, dailyRecord, dateKey, dayOffset, describeWhen, endOfDay, keyOf, keysOf, planReview, ratingFor,
-	settledRecord, startOfDay, streakOf,
+	Memory, Pace, dailyRecord, dateKey, dayOffset, describeWhen, endOfDay, expectedScore, keyOf, keysOf, planReview,
+	ratingFor, settledRecord, startOfDay, streakOf,
 } from "../src/memory";
 import { AnswerIndex } from "../src/history";
 import { Store } from "../src/store";
@@ -256,6 +256,25 @@ test("endOfDay is the last millisecond of the local day", () => {
 	const end = endOfDay(NOW);
 	assert.equal(end.getDate(), NOW.getDate());
 	assert.equal(new Date(end.getTime() + 1).getHours(), 0);
+});
+
+test("the radar's expected score fades between reviews", () => {
+	const history = [attempt("a", "q1", 100, ago(2))];
+	const now = expectedScore(history, 0.9, NOW)("a", "q1")!;
+	const later = expectedScore(history, 0.9, new Date(NOW.getTime() + 60 * DAY))("a", "q1")!;
+	assert.ok(now > later, `${now} should fade to below it by ${later}`);
+	assert.ok(now <= 100 && later > 0);
+});
+
+test("a fresh miss does not read as knowledge", () => {
+	// Recall alone would be ~100% the moment after any answer, right or wrong.
+	const score = expectedScore([attempt("a", "q1", 0, ago(0))], 0.9, NOW)("a", "q1");
+	assert.equal(score, 0);
+});
+
+test("the expected score at a past moment ignores later answers", () => {
+	const history = [attempt("a", "q1", 100, ago(1))];
+	assert.equal(expectedScore(history, 0.9, new Date(NOW.getTime() - 7 * DAY))("a", "q1"), null);
 });
 
 test("describeWhen speaks plainly", () => {

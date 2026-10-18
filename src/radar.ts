@@ -1,13 +1,22 @@
 import { Bank, Course, SkillAxis } from "./types";
-import { AnswerIndex } from "./history";
+
+/** A question's score for the radar, 0–100, or null if it has never been answered. */
+export type QuestionScore = (bankId: string, questionId: string) => number | null;
 
 export interface AxisScore {
 	axis: SkillAxis;
-	/** 0-100 mastery, counting unseen questions as zero. */
+	/** 0-100, counting questions never answered as zero. */
 	score: number;
 	/** How many questions in this course feed the axis. */
 	total: number;
 	seen: number;
+	/** The score at an earlier moment, drawn as a dashed outline. */
+	before?: number;
+}
+
+/** Attaches each axis's earlier score, for the radar's dashed outline. */
+export function withBefore(now: AxisScore[], before: AxisScore[]): AxisScore[] {
+	return now.map((s, i) => ({ ...s, before: before[i]?.score }));
 }
 
 /** Which axis a question belongs to: its own `axis`, else the course topic map. */
@@ -20,18 +29,18 @@ export function axisFor(course: Course, topic: string, explicit?: string): strin
 }
 
 /**
- * The vault-wide radar: one spoke per course, scored by that course's own mean
- * axis mastery. Answers "where am I across everything I study", where the
+ * The vault-wide radar: one spoke per course, scored by the mean of that
+ * course's own axes. Answers "where am I across everything I study", where the
  * per-course radar answers "where am I inside this subject".
  */
 export function scoreCourses(
 	courses: Course[],
 	banksFor: (c: Course) => Bank[],
-	index: AnswerIndex
+	scoreOf: QuestionScore
 ): AxisScore[] {
 	return courses.map((course) => {
 		const banks = banksFor(course);
-		const inner = scoreAxes(course, banks, index);
+		const inner = scoreAxes(course, banks, scoreOf);
 		const withQuestions = inner.filter((a) => a.total > 0);
 		const score = withQuestions.length
 			? Math.round(withQuestions.reduce((s, a) => s + a.score, 0) / withQuestions.length)
@@ -61,7 +70,12 @@ export function untested(scores: AxisScore[]): AxisScore[] {
 	return scores.filter((s) => s.total > 0 && s.seen === 0);
 }
 
-export function scoreAxes(course: Course, banks: Bank[], index: AnswerIndex): AxisScore[] {
+/**
+ * Scores each of a course's axes as the mean of its questions' scores, with
+ * questions never answered counting as zero: the number answers "how much of
+ * this area do I own", not "how did I do on the few I tried".
+ */
+export function scoreAxes(course: Course, banks: Bank[], scoreOf: QuestionScore): AxisScore[] {
 	const items = banks.flatMap((b) => b.questions.map((q) => ({ bankId: b.id, q })));
 
 	return course.axes.map((axis) => {
@@ -72,7 +86,7 @@ export function scoreAxes(course: Course, banks: Bank[], index: AnswerIndex): Ax
 		let sum = 0;
 		let seen = 0;
 		for (const it of qs) {
-			const m = index.mastery(it.bankId, it.q.id);
+			const m = scoreOf(it.bankId, it.q.id);
 			if (m !== null) {
 				seen += 1;
 				sum += m;
@@ -137,14 +151,19 @@ export function renderRadar(parent: HTMLElement, scores: AxisScore[], opts: Rada
 		});
 	}
 
+	const outline = (value: (s: AxisScore) => number) =>
+		scores
+			.map((s, i) => pt(i, (radius * Math.max(0, Math.min(100, value(s)))) / 100).map((v) => v.toFixed(1)).join(","))
+			.join(" ");
+
+	// Where it stood earlier, dashed, behind the shape: the gap between the
+	// two is what has faded, or grown, since. Left out when nothing moved.
+	if (scores.some((s) => s.before !== undefined && Math.abs(s.before - s.score) >= 1)) {
+		svg.createSvg("polygon", { cls: "rl-radar-ghost", attr: { points: outline((s) => s.before ?? 0) } });
+	}
+
 	// The shape itself.
-	const shape = scores
-		.map((s, i) => {
-			const r = (radius * Math.max(0, Math.min(100, s.score))) / 100;
-			return pt(i, r).map((v) => v.toFixed(1)).join(",");
-		})
-		.join(" ");
-	svg.createSvg("polygon", { cls: "rl-radar-shape", attr: { points: shape } });
+	svg.createSvg("polygon", { cls: "rl-radar-shape", attr: { points: outline((s) => s.score) } });
 
 	// Vertex dots, so a zero axis is still visible. Untested axes are hollow, to
 	// separate "you got these wrong" from "you have not been asked yet".

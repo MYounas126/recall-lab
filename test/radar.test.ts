@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import { strict as assert } from "node:assert";
-import { AxisScore, renderRadar, wrapLabel } from "../src/radar";
+import { AxisScore, renderRadar, scoreCourses, withBefore, wrapLabel } from "../src/radar";
+import type { Bank, Course } from "../src/types";
+import { question } from "./helpers";
 import { MockEl } from "./helpers";
 
 const axis = (id: string, label: string, score: number, total = 10, seen = 5): AxisScore =>
@@ -42,6 +44,22 @@ test("fewer than three axes explains itself instead of drawing", () => {
 	assert.equal(root.children.length, 1);
 	assert.ok(root.children[0].cls.includes("rl-radar-empty"));
 	assert.match(root.children[0].textContent ?? "", /at least three/);
+});
+
+test("a dashed outline shows where the radar stood before, only when it moved", () => {
+	const ghosts = (s: AxisScore[]) => draw(s).all().filter((e) => e.cls.includes("rl-radar-ghost")).length;
+	assert.equal(ghosts(scores), 0, "no earlier scores, no outline");
+	assert.equal(ghosts(withBefore(scores, scores)), 0, "nothing moved, no outline");
+	const faded = withBefore(scores, scores.map((s) => ({ ...s, score: s.score + 20 })));
+	assert.equal(ghosts(faded), 1);
+	assert.deepEqual(faded.map((s) => s.before), [82, 20, 108, 20]);
+});
+
+test("the vault radar scores each course as the mean of its axes", () => {
+	const course = (id: string): Course => ({ id, title: id, folder: id, axes: [{ id: "a1", label: "A" }, { id: "a2", label: "B" }] });
+	const bank = (id: string): Bank => ({ id, title: id, questions: [question("q1"), question("q2", { axis: "a2" })] });
+	const scored = scoreCourses([course("x"), course("y")], (c) => [bank(c.id)], (b, q) => (b === "x" && q === "q1" ? 80 : null));
+	assert.deepEqual(scored.map((s) => [s.axis.id, s.score, s.total, s.seen]), [["x", 40, 2, 1], ["y", 0, 2, 0]]);
 });
 
 test("long labels wrap to at most three lines", () => {
