@@ -30,6 +30,8 @@ export interface RecallLabSettings {
 	memoryMap: boolean;
 	/** Hide choice options until you have tried to recall the answer. */
 	recallFirst: boolean;
+	/** Turn ==highlighted== text in course notes into fill-in-the-blank questions. */
+	highlightClozes: boolean;
 }
 
 export const DEFAULT_SETTINGS: RecallLabSettings = {
@@ -49,6 +51,7 @@ export const DEFAULT_SETTINGS: RecallLabSettings = {
 	newPerDay: 20,
 	memoryMap: true,
 	recallFirst: false,
+	highlightClozes: true,
 };
 
 export class RecallLabSettingTab extends PluginSettingTab {
@@ -147,6 +150,19 @@ export class RecallLabSettingTab extends PluginSettingTab {
 			.addToggle((t) =>
 				t.setValue(this.plugin.settings.recallFirst).onChange(async (v) => {
 					this.plugin.settings.recallFirst = v;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(containerEl)
+			.setName("Fill in your highlights")
+			.setDesc(
+				"Turn each sentence with ==highlighted== text in a course note into a fill-in-the-blank question. " +
+					"Made on your device, with no Claude involved; they join that note's exams and your reviews."
+			)
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.highlightClozes).onChange(async (v) => {
+					this.plugin.settings.highlightClozes = v;
 					await this.plugin.saveSettings();
 				})
 			);

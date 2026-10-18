@@ -1,7 +1,7 @@
 import { App, ButtonComponent, Component, ItemView, MarkdownRenderer, Modal, Notice, Platform, WorkspaceLeaf, setIcon } from "obsidian";
 import type RecallLabPlugin from "./main";
 import { Store } from "./store";
-import { gradeLocally } from "./grader";
+import { clozeBlanks, clozePieces, gradeLocally, sameValue } from "./grader";
 import { shuffled } from "./util";
 import { QuestionScore, renderRadar, scoreAxes, scoreCourses, weakestTested, untested, withBefore, AxisScore } from "./radar";
 import { Attempt, Bank, Confidence, Course, ExamItem, Lab, LabProgress, ProgressFile, Question, SessionSummary, Tier, labScore, letterGrade } from "./types";
@@ -12,6 +12,7 @@ import {
 } from "./memory";
 import { keyAction } from "./keys";
 import { RecallStage, optionsHidden, recallApplies } from "./recall";
+import { AnswerState, blankSize, describeResponse, notReady, plain, scrambled } from "./answers";
 import { checkFlag } from "./labs";
 import { INSTALL_HINT } from "./claude";
 
@@ -25,14 +26,6 @@ export const VIEW_TYPE_RECALL = "recall-lab-view";
 
 type Screen = "home" | "folder" | "exam" | "results" | "history" | "lab";
 
-interface AnswerState {
-	/** ORIGINAL choice indices — never display slots. */
-	chosen: number[];
-	text: string;
-	image?: string;
-	/** Typed from memory before the options were shown, in recall-first mode. */
-	recalled?: string;
-}
 
 interface LiveAnswer {
 	q: Question;
@@ -55,6 +48,8 @@ export class RecallLabView extends ItemView {
 	private banks: Bank[] = [];
 	private courses: Course[] = [];
 	private allLabs: Lab[] = [];
+	/** Fill-in-the-blank questions made from each course note's ==highlights==. */
+	private highlightBanks: Bank[] = [];
 	private openLab: Lab | null = null;
 
 	/** The paper being sat: a note's bank, a course's banks merged, or a review. */
@@ -103,10 +98,11 @@ export class RecallLabView extends ItemView {
 		if (this.screen !== "exam" || !keys) return;
 		// Tag names, not instanceof: a popout window has its own element
 		// classes, so instanceof HTMLTextAreaElement is false for a text box
-		// there, and typing "s" would submit the answer.
+		// there, and typing "s" would submit the answer. A dropdown takes
+		// letters and digits to jump between its options.
 		const target = e.target as HTMLElement | null;
 		const tag = target?.tagName ?? "";
-		const typing = tag === "TEXTAREA" || target?.isContentEditable === true ||
+		const typing = tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable === true ||
 			(tag === "INPUT" && !["radio", "checkbox", "button", "file"].includes((target as HTMLInputElement).type));
 		const action = keyAction({
 			key: e.key,
@@ -174,6 +170,20 @@ export class RecallLabView extends ItemView {
 		this.banks = await this.plugin.store.listBanks();
 		this.courses = await this.plugin.store.listCourses();
 		this.allLabs = await this.plugin.labs.list();
+		this.highlightBanks = this.plugin.settings.highlightClozes
+			? await this.plugin.store.listHighlightBanks(this.courses)
+			: [];
+	}
+
+	/** The highlight questions of the notes under a folder. */
+	private highlightsIn(folder: string): Bank[] {
+		const prefix = folder.replace(/\/+$/, "") + "/";
+		return this.highlightBanks.filter((b) => b.note?.startsWith(prefix));
+	}
+
+	/** Every bank, highlight questions included: the scope of the daily review. */
+	private get everyBank(): Bank[] {
+		return [...this.banks, ...this.highlightBanks];
 	}
 
 	// ================================================================ layout
@@ -274,7 +284,7 @@ export class RecallLabView extends ItemView {
 			return;
 		}
 
-		await this.renderReviewPanel(main, this.banks);
+		await this.renderReviewPanel(main, this.everyBank);
 
 		// The central radar: one spoke per course, across the whole vault.
 		const expected = this.expectedScores(progress.attempts);
@@ -341,7 +351,7 @@ export class RecallLabView extends ItemView {
 	private async planFor(banks: Bank[]): Promise<{ plan: ReviewPlan; memory: Memory; keys: Set<string>; progress: ProgressFile }> {
 		const progress = await this.plugin.store.readProgress();
 		const memory = new Memory(progress.attempts, this.plugin.settings.targetRecall / 100);
-		const noteOf = new Map(this.banks.map((b) => [b.id, b.note]));
+		const noteOf = new Map(this.everyBank.map((b) => [b.id, b.note]));
 		const items = Store.itemsOf(banks);
 		const plan = planReview({
 			items,
@@ -405,7 +415,7 @@ export class RecallLabView extends ItemView {
 	async startReview(course?: Course): Promise<void> {
 		await this.refresh();
 		await this.review(
-			course ? Store.banksForCourse(course, this.banks) : this.banks,
+			course ? [...Store.banksForCourse(course, this.banks), ...this.highlightsIn(course.folder)] : this.everyBank,
 			course ? `review:${course.id}` : "review",
 			course ? `Review · ${course.title}` : "Daily review"
 		);
@@ -418,7 +428,7 @@ export class RecallLabView extends ItemView {
 	async startNoteReview(path: string): Promise<void> {
 		await this.refresh();
 		const name = path.split("/").pop()!.replace(/\.md$/, "");
-		await this.review(this.banks.filter((b) => b.note === path), `review:${path}`, `Review · ${name}`, true);
+		await this.review(this.everyBank.filter((b) => b.note === path), `review:${path}`, `Review · ${name}`, true);
 	}
 
 	private async review(banks: Bank[], id: string, title: string, dueOnly = false): Promise<void> {
@@ -532,19 +542,21 @@ export class RecallLabView extends ItemView {
 			});
 		}
 
-		if (courseBanks.length) await this.renderReviewPanel(main, courseBanks, course);
+		const reviewable = [...courseBanks, ...this.highlightsIn(folder)];
+		if (reviewable.length) await this.renderReviewPanel(main, reviewable, course);
 
 		// Course-wide exam.
 		const examPanel = main.createDiv({ cls: "rl-panel" });
 		examPanel.createEl("h3", { text: "Course exam" });
 		const allQ = courseBanks.reduce((n, b) => n + b.questions.length, 0);
-		examPanel.createDiv({ cls: "rl-muted", text: `One paper that ramps from recall to application to synthesis, drawn across all ${courseBanks.length} quiz${courseBanks.length === 1 ? "" : "zes"} (${allQ} questions).` });
+		const highlighted = this.highlightsIn(folder).reduce((n, b) => n + b.questions.length, 0);
+		examPanel.createDiv({ cls: "rl-muted", text: `One paper that ramps from recall to application to synthesis, drawn across all ${courseBanks.length} quiz${courseBanks.length === 1 ? "" : "zes"} (${allQ} questions${highlighted ? `, and ${highlighted} from your highlights` : ""}).` });
 		const ea = examPanel.createDiv({ cls: "rl-actions" });
 		if (courseBanks.length) {
 			new ButtonComponent(ea).setButtonText(`Start exam (${this.plugin.settings.defaultLength})`).setCta()
 				.onClick(() => void this.beginCourseExam(course, courseBanks, this.plugin.settings.defaultLength));
 			new ButtonComponent(ea).setButtonText("Full exam (everything)")
-				.onClick(() => void this.beginCourseExam(course, courseBanks, allQ));
+				.onClick(() => void this.beginCourseExam(course, courseBanks, "all"));
 		} else {
 			examPanel.createDiv({ cls: "rl-muted", text: "No quizzes yet — generate one from a note below." });
 		}
@@ -642,6 +654,11 @@ export class RecallLabView extends ItemView {
 			const link = name.createEl("a", { text: path.split("/").pop()!.replace(/\.md$/, ""), cls: "rl-link" });
 			link.onclick = (e) => { e.preventDefault(); void this.app.workspace.openLinkText(path, "", false); };
 
+			const highlights = this.highlightBanks.find((b) => b.note === path)?.questions.length ?? 0;
+			if (highlights) {
+				name.createSpan({ cls: "rl-chip rl-chip-dim", text: `${highlights} highlight${highlights === 1 ? "" : "s"}` });
+			}
+
 			const labs = this.allLabs.filter((l) => l.note === path);
 			if (labs.length) {
 				const chip = row.createDiv({ cls: "rl-note-labs" });
@@ -693,7 +710,7 @@ export class RecallLabView extends ItemView {
 
 	// ================================================================ exam
 
-	private async beginCourseExam(course: Course, banks: Bank[], total: number): Promise<void> {
+	private async beginCourseExam(course: Course, banks: Bank[], total: number | "all"): Promise<void> {
 		const progress = await this.plugin.store.readProgress();
 		// One virtual paper across the course. Each question keeps its own bank,
 		// so its answer is recorded against that bank, not the paper.
@@ -703,8 +720,8 @@ export class RecallLabView extends ItemView {
 			note: course.folder,
 			questions: [],
 		};
-		const items = Store.itemsOf(banks);
-		const picked = total >= items.length
+		const items = Store.itemsOf([...banks, ...this.highlightsIn(course.folder)]);
+		const picked = total === "all" || total >= items.length
 			? Store.fullExam(items)
 			: Store.pickExam(items, new AnswerIndex(progress.attempts), total);
 		await this.launch(merged, picked);
@@ -712,7 +729,7 @@ export class RecallLabView extends ItemView {
 
 	private async beginExam(bank: Bank, full: boolean): Promise<void> {
 		const progress = await this.plugin.store.readProgress();
-		const items = Store.itemsOf([bank]);
+		const items = Store.itemsOf([bank, ...this.highlightBanks.filter((b) => b.note && b.note === bank.note)]);
 		const picked = full
 			? Store.fullExam(items)
 			: Store.pickExam(items, new AnswerIndex(progress.attempts), Math.min(this.plugin.settings.defaultLength, items.length));
@@ -776,7 +793,10 @@ export class RecallLabView extends ItemView {
 		if (q.timestamp) meta.createSpan({ cls: "rl-chip rl-chip-dim", text: q.timestamp });
 
 		await this.md(q.prompt, card.createDiv({ cls: "rl-prompt" }));
-		if (q.code) card.createEl("pre", { cls: "rl-code" }).createEl("code", { text: q.code });
+		// Click-the-bug and trace questions draw their own numbered code.
+		if (q.code && q.type !== "hotspot" && q.type !== "trace") {
+			card.createEl("pre", { cls: "rl-code" }).createEl("code", { text: q.code });
+		}
 
 		if (hidden) {
 			recallText = this.renderRecallStage(card);
@@ -797,24 +817,35 @@ export class RecallLabView extends ItemView {
 		// Saying how sure you are tunes the schedule: a lucky guess comes back
 		// soon, a quick sure answer goes further out. Submit claims neither.
 		const actions = card.createDiv({ cls: "rl-actions" });
-		new ButtonComponent(actions).setButtonText("Guessing")
-			.setTooltip("Even if it is right, a guess comes back soon")
-			.onClick(() => void this.submit(item, state, wrap, false, "guess"));
+		// A trace shows each step's answer as it is checked, so by Submit you
+		// know how you did: saying how sure you were would only inflate it.
+		const askSure = q.type !== "trace";
+		if (askSure) {
+			new ButtonComponent(actions).setButtonText("Guessing")
+				.setTooltip("Even if it is right, a guess comes back soon")
+				.onClick(() => void this.submit(item, state, wrap, false, "guess"));
+		}
 		const submit = new ButtonComponent(actions).setButtonText("Submit").setCta()
 			.onClick(() => void this.submit(item, state, wrap, false, "unsure"));
-		new ButtonComponent(actions).setButtonText("Sure")
-			.setTooltip("Right, sure and quick: it is spaced out further")
-			.onClick(() => void this.submit(item, state, wrap, false, "sure"));
+		if (askSure) {
+			new ButtonComponent(actions).setButtonText("Sure")
+				.setTooltip("Right, sure and quick: it is spaced out further")
+				.onClick(() => void this.submit(item, state, wrap, false, "sure"));
+		}
 		const written = q.type === "short" || q.type === "command" || q.type === "image";
 		const giveUp = () => { state.text = ""; void this.submit(item, state, wrap, true); };
 		if (written) new ButtonComponent(actions).setButtonText("I don't know").onClick(giveUp);
-		actions.createSpan({ cls: "rl-hint", text: "Guessing or sure? Saying so tunes when this comes back." });
+		if (askSure) actions.createSpan({ cls: "rl-hint", text: "Guessing or sure? Saying so tunes when this comes back." });
 		const mod = Platform.isMacOS ? "⌘" : "Ctrl";
 		actions.createDiv({
 			cls: "rl-keys",
 			text: options.length
 				? `Keys: 1–${Math.min(9, options.length)} choose · Enter submit · G guessing · S sure`
-				: `Keys: ${mod}+Enter submit · Esc leaves the box, then G guessing · S sure${written ? " · D don't know" : ""}`,
+				: q.type === "order"
+					? "Keys: Enter submit · G guessing · S sure"
+					: q.type === "trace"
+						? "Keys: Enter moves to the next box and checks a full step"
+						: `Keys: ${mod}+Enter submit · Esc leaves the box, then G guessing · S sure${written ? " · D don't know" : ""}`,
 		});
 
 		this.examKeys = {
@@ -867,8 +898,15 @@ export class RecallLabView extends ItemView {
 		await this.render();
 	}
 
-	/** Draws the answer controls. Returns the option inputs in display order, for the 1–9 keys. */
-	private renderAnswerWidget(q: Question, el: HTMLElement, state: AnswerState): HTMLInputElement[] {
+	/** Draws the answer controls. Returns what the 1–9 keys click, in display order. */
+	private renderAnswerWidget(q: Question, el: HTMLElement, state: AnswerState): HTMLElement[] {
+		switch (q.type) {
+			case "hotspot": return this.renderHotspot(q, el, state);
+			case "order": this.renderOrder(q, el, state); return [];
+			case "match": this.renderMatch(q, el, state); return [];
+			case "cloze": this.renderCloze(q, el, state); return [];
+			case "trace": this.renderTrace(q, el, state); return [];
+		}
 		if (q.type === "mcq" || q.type === "multi") {
 			const multi = q.type === "multi";
 			if (multi) el.createDiv({ cls: "rl-hint", text: "Select every correct option." });
@@ -936,23 +974,206 @@ export class RecallLabView extends ItemView {
 		return [];
 	}
 
+	/** Click the bug: numbered code whose lines toggle; one line, or several when the answer has several. */
+	private renderHotspot(q: Question, el: HTMLElement, state: AnswerState): HTMLElement[] {
+		const want = q.lines?.length ?? 1;
+		el.createDiv({ cls: "rl-hint", text: want > 1 ? `Click the ${want} lines.` : "Click the line." });
+		const box = el.createDiv({ cls: "rl-hotspot" });
+		const rows: HTMLElement[] = [];
+		(q.code ?? "").split("\n").forEach((text, i) => {
+			const line = i + 1;
+			const row = box.createDiv({ cls: "rl-hot-line", attr: { tabindex: "0", role: "button" } });
+			row.createSpan({ cls: "rl-hot-no", text: String(line) });
+			row.createSpan({ cls: "rl-hot-code", text: text || " " });
+			const toggle = () => {
+				if (this.revealed) return;
+				state.chosen = want > 1
+					? state.chosen.includes(line) ? state.chosen.filter((l) => l !== line) : [...state.chosen, line]
+					: [line];
+				rows.forEach((r, ri) => r.toggleClass("rl-hot-chosen", state.chosen.includes(ri + 1)));
+			};
+			row.onclick = toggle;
+			row.onkeydown = (e) => {
+				if (e.key === " ") { e.preventDefault(); toggle(); }
+			};
+			rows.push(row);
+		});
+		return rows;
+	}
+
+	/** Order the steps: drag the items, or move them with their arrows. */
+	private renderOrder(q: Question, el: HTMLElement, state: AnswerState): void {
+		const items = q.items ?? [];
+		state.order = scrambled(items.length);
+		state.orderStart = state.order.slice();
+		el.createDiv({ cls: "rl-hint", text: "Put these in order: drag them, or use the arrows." });
+		const list = el.createDiv({ cls: "rl-order" });
+		/** Our own drag type, so text or a file dropped from elsewhere is ignored. */
+		const DRAG = "application/x-recall-lab-order";
+		const draw = (focus?: { pos: number; dir: "up" | "down" }) => {
+			list.empty();
+			const order = state.order!;
+			order.forEach((original, pos) => {
+				const row = list.createDiv({ cls: "rl-order-item", attr: { draggable: "true" } });
+				row.createSpan({ cls: "rl-order-pos", text: String(pos + 1) });
+				void this.md(items[original], row.createDiv({ cls: "rl-order-text" }));
+				const move = (to: number, dir: "up" | "down") => {
+					if (this.revealed || to < 0 || to >= order.length) return;
+					const [it] = order.splice(pos, 1);
+					order.splice(to, 0, it);
+					// Redrawing removes the button that had focus; put it back on
+					// the moved item, so the arrows and the exam keys keep working.
+					draw({ pos: to, dir });
+				};
+				const up = row.createEl("button", { cls: "rl-order-btn", text: "↑", attr: { "aria-label": "Move up" } });
+				const down = row.createEl("button", { cls: "rl-order-btn", text: "↓", attr: { "aria-label": "Move down" } });
+				up.disabled = pos === 0;
+				down.disabled = pos === order.length - 1;
+				up.onclick = () => move(pos - 1, "up");
+				down.onclick = () => move(pos + 1, "down");
+				if (focus?.pos === pos) {
+					const want = focus.dir === "up" ? up : down;
+					(want.disabled ? (want === up ? down : up) : want).focus();
+				}
+				row.ondragstart = (e) => e.dataTransfer?.setData(DRAG, String(pos));
+				row.ondragover = (e) => e.preventDefault();
+				row.ondrop = (e) => {
+					e.preventDefault();
+					const raw = e.dataTransfer?.getData(DRAG);
+					const from = raw ? Number(raw) : NaN;
+					if (!Number.isInteger(from) || from < 0 || from >= order.length || from === pos || this.revealed) return;
+					const [it] = order.splice(from, 1);
+					order.splice(pos, 0, it);
+					draw();
+				};
+			});
+		};
+		draw();
+	}
+
+	/** Match: a dropdown of the shuffled right-hand sides beside each left-hand item. */
+	private renderMatch(q: Question, el: HTMLElement, state: AnswerState): void {
+		const pairs = q.pairs ?? [];
+		state.matches = pairs.map(() => -1);
+		el.createDiv({ cls: "rl-hint", text: "Match each item on the left with one on the right." });
+		const rights = shuffled(pairs.map((_, i) => i));
+		const grid = el.createDiv({ cls: "rl-match" });
+		pairs.forEach(([left], i) => {
+			const row = grid.createDiv({ cls: "rl-match-row" });
+			void this.md(left, row.createDiv({ cls: "rl-match-left" }));
+			const select = row.createEl("select", { cls: "dropdown rl-match-select" });
+			select.createEl("option", { text: "Choose…", attr: { value: "-1" } });
+			for (const j of rights) select.createEl("option", { text: plain(pairs[j][1]), attr: { value: String(j) } });
+			select.onchange = () => { state.matches![i] = Number(select.value); };
+		});
+	}
+
+	/** Fill in the blank: the sentence with a text box at each blank. */
+	private renderCloze(q: Question, el: HTMLElement, state: AnswerState): void {
+		const blanks = clozeBlanks(q.cloze ?? "");
+		state.blanks = blanks.map(() => "");
+		const line = el.createDiv({ cls: "rl-cloze" });
+		clozePieces(q.cloze ?? "").forEach((piece, i) => {
+			inlineText(line, piece);
+			if (i >= blanks.length) return;
+			const input = line.createEl("input", {
+				type: "text",
+				cls: "rl-blank",
+				attr: { size: String(blankSize(blanks[i])), spellcheck: "false", "aria-label": `Blank ${i + 1}` },
+			});
+			input.oninput = () => { state.blanks![i] = input.value; };
+		});
+		window.setTimeout(() => line.querySelector("input")?.focus(), 0);
+	}
+
+	/**
+	 * Step-through trace: numbered code, and one step at a time the values to
+	 * fill in once that line has run. Each step is checked straight away,
+	 * showing the right values before the next step appears; the answer can
+	 * be submitted once every step is checked.
+	 */
+	private renderTrace(q: Question, el: HTMLElement, state: AnswerState): void {
+		const steps = q.trace ?? [];
+		state.cells = steps.map((s) => Object.keys(s.expect).map(() => ""));
+		state.traceChecked = 0;
+		const code = el.createDiv({ cls: "rl-hotspot rl-trace-code" });
+		const rows = (q.code ?? "").split("\n").map((text, i) => {
+			const row = code.createDiv({ cls: "rl-hot-line rl-trace-line" });
+			row.createSpan({ cls: "rl-hot-no", text: String(i + 1) });
+			row.createSpan({ cls: "rl-hot-code", text: text || " " });
+			return row;
+		});
+		const stepsEl = el.createDiv({ cls: "rl-trace-steps" });
+
+		const showStep = (s: number) => {
+			const step = steps[s];
+			rows.forEach((r, i) => r.toggleClass("rl-trace-current", i + 1 === step.line));
+			const box = stepsEl.createDiv({ cls: "rl-trace-step" });
+			box.createDiv({ cls: "rl-model-label", text: `Step ${s + 1} of ${steps.length}: once line ${step.line} has run` });
+			const grid = box.createDiv({ cls: "rl-trace-grid" });
+			const entries = Object.entries(step.expect);
+			const inputs = entries.map(([name], k) => {
+				const cell = grid.createDiv({ cls: "rl-trace-cell" });
+				cell.createSpan({ cls: "rl-trace-name", text: name });
+				const input = cell.createEl("input", {
+					type: "text",
+					cls: "rl-blank rl-mono",
+					attr: { size: "12", spellcheck: "false", "aria-label": name },
+				});
+				input.oninput = () => { state.cells![s][k] = input.value; };
+				input.onkeydown = (e) => {
+					if (e.key !== "Enter" || e.metaKey || e.ctrlKey) return;
+					e.preventDefault();
+					// Enter moves on to the next empty cell; a step is checked
+					// only once every cell has something in it.
+					const empty = inputs.findIndex((x, i) => i !== k && !x.value.trim());
+					if (empty >= 0) inputs[empty].focus();
+					else if (input.value.trim()) check();
+				};
+				return input;
+			});
+			const button = new ButtonComponent(box)
+				.setButtonText(s === steps.length - 1 ? "Check last step" : "Check step")
+				.onClick(() => check());
+			const check = () => {
+				if (this.revealed || (state.traceChecked ?? 0) > s) return;
+				entries.forEach(([, want], k) => {
+					const right = sameValue(state.cells![s][k], want);
+					inputs[k].addClass(right ? "rl-cell-right" : "rl-cell-wrong");
+					inputs[k].disabled = true;
+					if (!right) inputs[k].parentElement?.createSpan({ cls: "rl-trace-want", text: want });
+				});
+				button.buttonEl.remove();
+				state.traceChecked = s + 1;
+				if (s + 1 < steps.length) showStep(s + 1);
+				else {
+					rows.forEach((r) => r.removeClass("rl-trace-current"));
+					this.examKeys?.focus();
+				}
+			};
+			window.setTimeout(() => inputs[0]?.focus(), 0);
+		};
+		if (steps.length) showStep(0);
+	}
+
 	private async submit(
 		item: ExamItem, state: AnswerState, wrap: HTMLElement, gaveUp = false, confidence?: Confidence
 	): Promise<void> {
 		const q = item.q;
 		if (this.revealed) return;
-		if ((q.type === "mcq" || q.type === "multi") && !state.chosen.length) { new Notice("Pick an answer first."); return; }
+		const unready = gaveUp ? null : notReady(q, state);
+		if (unready) { new Notice(unready); return; }
 		this.revealed = true;
 		const ms = Date.now() - this.questionStart;
 		const extra: Pick<Attempt, "confidence" | "recalled"> = {};
-		if (confidence) extra.confidence = confidence;
+		if (confidence && q.type !== "trace") extra.confidence = confidence;
 		if (state.recalled !== undefined) extra.recalled = state.recalled;
 
 		const local = gaveUp
 			? { score: 0, verdict: "incorrect" as const, feedback: "You skipped this one.", missing: [q.topic] }
-			: gradeLocally(q, state.text, state.chosen);
+			: gradeLocally(q, state);
 
-		const live: LiveAnswer = { q, bankId: item.bankId, response: state.text || describeChoice(q, state.chosen), image: state.image, ms };
+		const live: LiveAnswer = { q, bankId: item.bankId, response: describeResponse(q, state), image: state.image, ms };
 		if (local) {
 			live.attempt = this.attemptFrom(item, live.response, local.score, local.verdict, local.feedback, local.missing, "local", ms, extra);
 			this.keep(live.attempt);
@@ -1009,7 +1230,10 @@ export class RecallLabView extends ItemView {
 
 	private showFeedback(q: Question, live: LiveAnswer, wrap: HTMLElement, marking = false): HTMLElement {
 		wrap.querySelector(".rl-actions")?.remove();
-		wrap.querySelectorAll(".rl-answer input, .rl-answer textarea").forEach((el) => el.setAttr("disabled", "true"));
+		wrap.querySelectorAll(".rl-answer input, .rl-answer textarea, .rl-answer select, .rl-answer button")
+			.forEach((el) => el.setAttr("disabled", "true"));
+		// Click the bug: show which lines were the answer.
+		wrap.querySelectorAll(".rl-hot-line").forEach((row, i) => row.toggleClass("rl-hot-answer", Boolean(q.lines?.includes(i + 1))));
 
 		const panel = wrap.createDiv({ cls: "rl-feedback" });
 		if (marking) {
@@ -1169,7 +1393,7 @@ export class RecallLabView extends ItemView {
 		const byAi = graded.filter((a) => a.gradedBy === "ai").length;
 		const now = new Date();
 		const memory = new Memory(progress.attempts, this.plugin.settings.targetRecall / 100);
-		const tomorrow = memory.forecast(now, 2, keysOf(Store.itemsOf(this.banks)))[1];
+		const tomorrow = memory.forecast(now, 2, keysOf(Store.itemsOf(this.everyBank)))[1];
 		hero.createDiv({
 			cls: "rl-result-sub",
 			text: `${graded.length} question${graded.length === 1 ? "" : "s"}${byAi ? ` · ${byAi} marked by Claude` : ""}` +
@@ -1468,7 +1692,7 @@ export class RecallLabView extends ItemView {
 	 * the target recall later cannot rewrite them (see settledRecord).
 	 */
 	private async dayRecord(progress: ProgressFile, now: Date): Promise<DayRecord[]> {
-		const keys = keysOf(Store.itemsOf(this.banks));
+		const keys = keysOf(Store.itemsOf(this.everyBank));
 		const { days, settle } = settledRecord(progress.attempts, this.plugin.settings.targetRecall / 100, keys, now, progress.days ?? {});
 		if (Object.keys(settle).length) {
 			try {
@@ -1588,12 +1812,16 @@ function tierLabel(t: Tier): string {
 	return t === "easy" ? "Easy" : t === "hard" ? "Hard" : "Brutal";
 }
 
-function describeChoice(q: Question, chosen: number[]): string {
-	if (!q.choices) return "";
-	return chosen.map((i) => q.choices![i]).join(" | ");
-}
 
 function clamp(n: number): number {
 	if (!Number.isFinite(n)) return 0;
 	return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+/** Short text placed inline, keeping `code` spans and dropping other markdown. */
+function inlineText(parent: HTMLElement, text: string): void {
+	for (const part of text.split(/(`[^`]+`)/)) {
+		if (/^`[^`]+`$/.test(part)) parent.createEl("code", { text: part.slice(1, -1) });
+		else if (part) parent.appendText(plain(part));
+	}
 }

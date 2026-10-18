@@ -1,4 +1,4 @@
-import { MarkdownView, Notice, Plugin, TFile, TFolder, WorkspaceLeaf, normalizePath, setIcon, setTooltip } from "obsidian";
+import { MarkdownView, Notice, Plugin, TAbstractFile, TFile, TFolder, WorkspaceLeaf, normalizePath, setIcon, setTooltip } from "obsidian";
 import { DEFAULT_SETTINGS, RecallLabSettingTab, RecallLabSettings } from "./settings";
 import { Store } from "./store";
 import { ClaudeCli } from "./claude";
@@ -152,12 +152,20 @@ export default class RecallLabPlugin extends Plugin {
 					path === normalizePath(`${this.settings.progressFolder}/attempts.json`)
 				) {
 					this.memoryChanged();
+				} else if (path.endsWith(".md")) {
+					// A note's highlights are questions too. Dropped quietly: the
+					// next look rebuilds it, without a redraw on every keystroke.
+					this.snapshot = null;
 				}
 			};
 			this.registerEvent(this.app.vault.on("modify", (f) => watch(f.path)));
 			this.registerEvent(this.app.vault.on("create", (f) => watch(f.path)));
 			this.registerEvent(this.app.vault.on("delete", (f) => watch(f.path)));
-			this.registerEvent(this.app.vault.on("rename", (f, old) => { watch(f.path); watch(old); }));
+			this.registerEvent(this.app.vault.on("rename", (f, old) => {
+				watch(f.path);
+				watch(old);
+				void this.followRename(f, old);
+			}));
 
 			// Vault writes are not safe during onload, so the log opens here.
 			this.log.open();
@@ -203,6 +211,25 @@ export default class RecallLabPlugin extends Plugin {
 		return leaf.view as RecallLabView;
 	}
 
+	/**
+	 * Highlight questions are filed under their note's path, so renaming or
+	 * moving the note would orphan their history; it moves along instead. A
+	 * note with no highlights is skipped without reading attempts.json.
+	 */
+	private async followRename(file: TAbstractFile, oldPath: string): Promise<void> {
+		const folder = file instanceof TFolder;
+		if (!folder) {
+			if (!(file instanceof TFile) || file.extension !== "md") return;
+			if (!(await this.app.vault.cachedRead(file)).includes("==")) return;
+		}
+		try {
+			const moved = await this.store.moveHighlightHistory(oldPath, file.path, folder);
+			if (moved) this.log.info("highlight history moved", { from: oldPath, to: file.path, answers: moved });
+		} catch (e) {
+			this.log.error("could not move highlight history", { from: oldPath, error: String(e) });
+		}
+	}
+
 	/** Recall Lab's view, if it is open and loaded. */
 	private openView(): RecallLabView | null {
 		const view = this.app.workspace.getLeavesOfType(VIEW_TYPE_RECALL)[0]?.view;
@@ -246,7 +273,13 @@ export default class RecallLabPlugin extends Plugin {
 	}
 
 	private async buildSnapshot(): Promise<MemorySnapshot> {
-		const [banks, progress] = await Promise.all([this.store.listBanks(), this.store.readProgress()]);
+		const [files, progress, courses] = await Promise.all([
+			this.store.listBanks(),
+			this.store.readProgress(),
+			this.store.listCourses(),
+		]);
+		// Highlight questions point at headings too, so they colour the dots.
+		const banks = this.settings.highlightClozes ? [...files, ...(await this.store.listHighlightBanks(courses))] : files;
 		const retention = this.settings.targetRecall / 100;
 		const memory = new Memory(progress.attempts, retention);
 		const now = new Date();

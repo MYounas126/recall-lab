@@ -7,19 +7,215 @@ export interface LocalResult {
 	missing: string[];
 }
 
+/** Everything an answer can carry, whatever the question type. */
+export interface Response {
+	text: string;
+	/** mcq and multi: original choice indices. hotspot: 1-based line numbers. */
+	chosen: number[];
+	/** order: original item indices, in the order you arranged them. */
+	order?: number[];
+	/** order: the order the items were first shown in, before you moved any. */
+	orderStart?: number[];
+	/** match: for each left-hand item, the pair whose right side you chose; -1 for none. */
+	matches?: number[];
+	/** cloze: what you typed in each blank. */
+	blanks?: string[];
+	/** trace: for each step, what you typed for each name, in the order the step lists them. */
+	cells?: string[][];
+}
+
 /** Marks the question types that need no help from Claude. */
-export function gradeLocally(q: Question, response: string, chosen: number[]): LocalResult | null {
+export function gradeLocally(q: Question, r: Response): LocalResult | null {
 	switch (q.type) {
 		case "mcq":
-			return gradeMcq(q, chosen);
+			return gradeMcq(q, r.chosen);
 		case "multi":
-			return gradeMulti(q, chosen);
+			return gradeMulti(q, r.chosen);
 		case "short":
 		case "command":
-			return gradeByPattern(q, response);
+			return gradeByPattern(q, r.text);
+		case "hotspot":
+			return gradeHotspot(q, r.chosen);
+		case "order":
+			return gradeOrder(q, r.order ?? [], r.orderStart);
+		case "match":
+			return gradeMatch(q, r.matches ?? []);
+		case "cloze":
+			return gradeCloze(q, r.blanks ?? []);
+		case "trace":
+			return gradeTrace(q, r.cells ?? []);
 		default:
 			return null;
 	}
+}
+
+/**
+ * The verdict for the part-by-part types: correct only when every part is,
+ * partial from half, and incorrect below that. A fully reversed order still
+ * keeps one item "in order", so any credit at all cannot mean partial.
+ */
+function verdictFor(score: number): Verdict {
+	return score >= 100 ? "correct" : score >= 50 ? "partial" : "incorrect";
+}
+
+function result(q: Question, score: number, feedback: string): LocalResult {
+	const verdict = verdictFor(score);
+	return { score, verdict, feedback: verdict === "correct" ? "" : feedback, missing: verdict === "correct" ? [] : [q.topic] };
+}
+
+/** Click the bug: the lines you picked against the lines that are the answer, by overlap. */
+function gradeHotspot(q: Question, chosen: number[]): LocalResult {
+	const want = new Set(q.lines ?? []);
+	const got = new Set(chosen);
+	const hits = [...got].filter((l) => want.has(l)).length;
+	const score = Math.round((hits / (new Set([...want, ...got]).size || 1)) * 100);
+	const code = (q.code ?? "").split("\n");
+	const show = (l: number) => `line ${l}: \`${(code[l - 1] ?? "").trim()}\``;
+	return result(q, score, `The answer is ${[...want].sort((a, b) => a - b).map(show).join("; ")}.`);
+}
+
+/** The length of the longest run of items already in the right relative order. */
+export function longestInOrder(seq: number[]): number {
+	const tails: number[] = [];
+	for (const x of seq) {
+		let lo = 0;
+		let hi = tails.length;
+		while (lo < hi) {
+			const mid = (lo + hi) >> 1;
+			if (tails[mid] < x) lo = mid + 1;
+			else hi = mid;
+		}
+		tails[lo] = x;
+	}
+	return tails.length;
+}
+
+/**
+ * Order the steps: credit for the longest stretch you had in the right
+ * relative order, so one step put in early costs one step, not everything
+ * after it. Only the improvement on the order the items were shown in
+ * counts: a shuffle already has a stretch in order, and submitting it
+ * untouched must not pass.
+ */
+function gradeOrder(q: Question, order: number[], start?: number[]): LocalResult {
+	const items = q.items ?? [];
+	const n = items.length;
+	let score = 0;
+	if (n && order.length === n) {
+		const got = longestInOrder(order);
+		const base = start?.length === n ? longestInOrder(start) : 0;
+		score = got === n ? 100 : base >= n ? 0 : Math.round((Math.max(0, got - base) / (n - base)) * 100);
+	}
+	return result(q, score, `The order is:\n${items.map((it, i) => `${i + 1}. ${it}`).join("\n")}`);
+}
+
+/** Match: one point per left-hand item paired with its own right-hand side. */
+function gradeMatch(q: Question, matches: number[]): LocalResult {
+	const pairs = q.pairs ?? [];
+	const wrong = pairs.filter((_, i) => matches[i] !== i);
+	const score = pairs.length ? Math.round(((pairs.length - wrong.length) / pairs.length) * 100) : 0;
+	return result(q, score, wrong.map(([l, r]) => `**${l}** goes with **${r}**.`).join(" "));
+}
+
+/** The blanks in cloze text, in order, each as its list of accepted answers. */
+export function clozeBlanks(cloze: string): string[][] {
+	return [...cloze.matchAll(/\{\{([^}]+)\}\}/g)].map((m) =>
+		m[1].split("|").map((s) => s.trim()).filter(Boolean)
+	);
+}
+
+/** The cloze text cut at its blanks: one more piece than there are blanks. */
+export function clozePieces(cloze: string): string[] {
+	return cloze.split(/\{\{[^}]+\}\}/);
+}
+
+/** Text answers compare without case, quotes, extra spaces or a trailing full stop. */
+export function sameText(given: string, want: string): boolean {
+	const n = (s: string) =>
+		s.toLowerCase().replace(/[`"'“”‘’]/g, "").replace(/\s+/g, " ").replace(/[.,;:!?]+$/, "").trim();
+	return n(given) !== "" && n(given) === n(want);
+}
+
+/** Fill in the blank: one point per blank that matches any of its accepted answers. */
+function gradeCloze(q: Question, blanks: string[]): LocalResult {
+	const want = clozeBlanks(q.cloze ?? "");
+	const right = want.filter((alts, i) => alts.some((a) => sameText(blanks[i] ?? "", a))).length;
+	const score = want.length ? Math.round((right / want.length) * 100) : 0;
+	const answers = want.map((alts) => `**${alts[0]}**`).join(", ");
+	return result(q, score, `The blank${want.length === 1 ? " is" : "s are"} ${answers}.`);
+}
+
+/**
+ * Reads a register-style value: decimal, 0x or h-suffixed hex, 0b binary, or
+ * a flag word (set/clear, true/false, on/off). Null if it is none of these.
+ */
+export function parseValue(s: string): bigint | null {
+	const t = s.trim().toLowerCase().replace(/[_\s]/g, "");
+	if (/^(true|set|on|yes)$/.test(t)) return BigInt(1);
+	if (/^(false|clear|cleared|off|no)$/.test(t)) return BigInt(0);
+	const neg = t.startsWith("-");
+	const body = neg ? t.slice(1) : t;
+	let v: bigint | null = null;
+	if (/^0x[0-9a-f]+$/.test(body) || /^0b[01]+$/.test(body)) v = BigInt(body);
+	else if (/^[0-9a-f]+h$/.test(body)) v = BigInt(`0x${body.slice(0, -1)}`);
+	else if (/^\d+$/.test(body)) v = BigInt(body);
+	if (v === null) return null;
+	return neg ? -v : v;
+}
+
+/** A negative value as the bits it leaves in a register this wide. */
+function unsigned(x: bigint, bits: number): bigint {
+	if (x >= BigInt(0)) return x;
+	const m = BigInt(2) ** BigInt(bits);
+	return ((x % m) + m) % m;
+}
+
+/**
+ * How wide a register is, from its name: x86 (rax 64, eax 32, ax 16, al 8),
+ * ARM (x0 64, w0 32) and the flags (1 bit). Null for any other name, such as
+ * a C variable, or a name that differs between architectures, such as sp.
+ */
+export function registerWidth(name: string): number | null {
+	const n = name.trim().toLowerCase();
+	if (/^r([abcd]x|si|di|bp|ip)$/.test(n) || /^r(8|9|1[0-5])$/.test(n) || /^x([0-9]|[12][0-9]|30)$/.test(n)) return 64;
+	if (/^e([abcd]x|si|di|sp|bp|ip)$/.test(n) || /^r(8|9|1[0-5])d$/.test(n) || /^w([0-9]|[12][0-9]|30)$/.test(n)) return 32;
+	if (/^[abcd]x$/.test(n) || /^r(8|9|1[0-5])w$/.test(n)) return 16;
+	if (/^[abcd][lh]$/.test(n) || /^(sil|dil|spl|bpl)$/.test(n) || /^r(8|9|1[0-5])b$/.test(n)) return 8;
+	if (/^[czsopad]f$/.test(n)) return 1;
+	return null;
+}
+
+/**
+ * Whether a typed value matches the expected one. Numbers compare by value
+ * whatever their base, so 16, 0x10 and 10h agree; BigInt keeps 64-bit
+ * registers exact. A negative number is read as the bits it leaves in the
+ * register named, so -1 is 0xFFFFFFFF in eax but not in rax — the
+ * zero-extension a trace is often testing. Without a known register width,
+ * numbers must match exactly. Anything else compares as text, ignoring case.
+ */
+export function sameValue(given: string, want: string, register = ""): boolean {
+	const a = parseValue(given);
+	const b = parseValue(want);
+	if (a !== null && b !== null) {
+		const bits = registerWidth(register);
+		return bits === null ? a === b : unsigned(a, bits) === unsigned(b, bits);
+	}
+	const n = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+	return n(given) !== "" && n(given) === n(want);
+}
+
+/** Step-through trace: one point per value right, across every step. */
+function gradeTrace(q: Question, cells: string[][]): LocalResult {
+	let total = 0;
+	const wrong: string[] = [];
+	(q.trace ?? []).forEach((step, s) => {
+		Object.entries(step.expect).forEach(([name, want], k) => {
+			total += 1;
+			if (!sameValue(cells[s]?.[k] ?? "", want, name)) wrong.push(`after line ${step.line}, **${name}** = \`${want}\``);
+		});
+	});
+	const score = total ? Math.round(((total - wrong.length) / total) * 100) : 0;
+	return result(q, score, `Not right: ${wrong.join("; ")}.`);
 }
 
 function gradeMcq(q: Question, chosen: number[]): LocalResult {

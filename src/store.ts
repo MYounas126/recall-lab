@@ -13,6 +13,7 @@ import {
 	TIERS,
 } from "./types";
 import { AnswerIndex } from "./history";
+import { highlightBank, highlightBankId } from "./highlights";
 import { SerialQueue, shuffled } from "./util";
 
 /** Reads banks and courses, and persists attempts, sessions and lab progress. */
@@ -122,6 +123,27 @@ export class Store {
 			.sort();
 	}
 
+	/**
+	 * Fill-in-the-blank questions made from the ==highlights== in every note of
+	 * these courses, one pseudo-bank per note. Kept apart from listBanks so a
+	 * note with only highlights still counts as having no quiz yet.
+	 */
+	async listHighlightBanks(courses: Course[]): Promise<Bank[]> {
+		const out: Bank[] = [];
+		const done = new Set<string>();
+		for (const course of courses) {
+			for (const path of this.notesIn(course.folder)) {
+				if (done.has(path)) continue;
+				done.add(path);
+				const file = this.vault.getAbstractFileByPath(path);
+				if (!(file instanceof TFile)) continue;
+				const bank = highlightBank(path, await this.vault.cachedRead(file));
+				if (bank) out.push(bank);
+			}
+		}
+		return out;
+	}
+
 	async bankForNote(path: string): Promise<Bank | null> {
 		const banks = await this.listBanks();
 		return banks.find((b) => b.note === path) ?? null;
@@ -223,6 +245,26 @@ export class Store {
 			found = true;
 		});
 		return found;
+	}
+
+	/**
+	 * Moves highlight answers from a note's old path to its new one — or, for
+	 * a folder, from every note under it. Returns how many answers moved.
+	 */
+	async moveHighlightHistory(from: string, to: string, folder: boolean): Promise<number> {
+		const oldId = highlightBankId(from);
+		const newId = highlightBankId(to);
+		let moved = 0;
+		await this.update((data) => {
+			for (const a of data.attempts) {
+				if (a.bankId === oldId && !folder) a.bankId = newId;
+				else if (folder && a.bankId.startsWith(`${oldId}/`)) a.bankId = newId + a.bankId.slice(oldId.length);
+				else continue;
+				moved += 1;
+			}
+			return moved > 0;
+		});
+		return moved;
 	}
 
 	/** Keeps finished days' records. A day already kept is never changed. */

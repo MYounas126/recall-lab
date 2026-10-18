@@ -119,6 +119,19 @@ each time, so it cannot drift out of step with your answer history.
 Builds run one at a time. Anything you ask for while one is running is queued
 behind it, and asking twice for the same note does not build it twice.
 
+**Hands-on question types.** Where a note suits them, new quizzes also include
+*click the bug* (click the faulty line in numbered code), *step-through trace*
+(fill in register and flag values after each instruction, checked step by
+step), *order the steps* and *match*. All are marked instantly on your device.
+Quizzes built before this get them when rebuilt, which uses Claude.
+
+**Fill in your highlights.** Every sentence with `==highlighted==` text in a
+course note becomes a fill-in-the-blank question, made on your device with no
+Claude involved. They join that note's exams and your reviews (Settings →
+Questions). Each one keeps its history until you edit that sentence; renaming
+or moving the note keeps it too. Highlights inside code, table rows and
+sentences containing `{`, `}` or `|` are left alone.
+
 ## Files it uses, all inside your vault
 
 | Path | What it is |
@@ -163,7 +176,7 @@ outline shows where the radar stood a week ago.
     {
       "id": "r03-e13",
       "tier": "easy",              // easy | hard | brutal
-      "type": "mcq",               // mcq | multi | short | command | image
+      "type": "mcq",               // mcq | multi | short | command | image | hotspot | trace | order | match | cloze
       "topic": "abcd-ordering",    // aggregates into weak areas
       "axis": "register-model",    // the course skill area it feeds on the radar
       "prompt": "Which register number is `RBX`?",
@@ -184,6 +197,19 @@ outline shows where the radar stood a week ago.
 
 An `accept` pattern that does not match never fails the answer — it just sends
 it to Claude. A correct answer phrased unusually must not be failed by a regex.
+
+The hands-on types carry their own fields:
+
+| Type | Fields |
+|---|---|
+| `hotspot` | `code`, and `lines`: the 1-based answer line(s). |
+| `trace` | `code`, and `trace`: `[{"line": 2, "expect": {"eax": "0x11", "ZF": "0"}}]`. Answers may be decimal, `0x…`, `…h` or `0b…`; flags may be `0`/`1` or `set`/`clear`. |
+| `order` | `items`, in the correct order. Shown shuffled; scored by the longest stretch you had in the right order. |
+| `match` | `pairs`: `[["left", "right"], …]`, every right side different. |
+| `cloze` | `cloze`: text with `{{answer}}` or `{{answer\|alternative}}` blanks. |
+
+A broken hands-on question is dropped when a quiz is built, rather than failing
+the whole quiz.
 
 ## Develop
 
