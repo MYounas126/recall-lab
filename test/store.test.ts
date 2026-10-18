@@ -2,7 +2,7 @@ import { test } from "node:test";
 import { strict as assert } from "node:assert";
 import { Store } from "../src/store";
 import type { LabProgress, SessionSummary } from "../src/types";
-import { makeVault } from "./helpers";
+import { attempt, makeVault } from "./helpers";
 
 const PATH = "_quiz/progress/attempts.json";
 const session: SessionSummary = {
@@ -76,6 +76,20 @@ test("a kept day is never changed", async () => {
 		"2026-10-16": { answers: 3, clear: true },
 		"2026-10-17": { answers: 1, clear: false },
 	});
+});
+
+test("highlight history follows its note when it is renamed or moved", async () => {
+	const vault = makeVault(0);
+	const store = storeOn(vault);
+	await store.recordAttempt(attempt("hl:Arch/a.md", "hl-1", 100));
+	await store.recordAttempt(attempt("hl:Arch/sub/b.md", "hl-2", 100));
+	await store.recordAttempt(attempt("hl:Arch/ab.md", "hl-3", 100));
+	await store.recordAttempt(attempt("real-bank", "q1", 100));
+	assert.equal(await store.moveHighlightHistory("Arch/a.md", "Arch/renamed.md", false), 1);
+	assert.equal(await store.moveHighlightHistory("Arch", "Course", true), 3);
+	const banks = (await store.readProgress()).attempts.map((a) => a.bankId);
+	assert.deepEqual(banks, ["hl:Course/renamed.md", "hl:Course/sub/b.md", "hl:Course/ab.md", "real-bank"]);
+	assert.equal(await store.moveHighlightHistory("Nowhere.md", "Else.md", false), 0);
 });
 
 test("saveCoaching reports a session that no longer exists", async () => {

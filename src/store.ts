@@ -13,7 +13,7 @@ import {
 	TIERS,
 } from "./types";
 import { AnswerIndex } from "./history";
-import { highlightBank } from "./highlights";
+import { highlightBank, highlightBankId } from "./highlights";
 import { SerialQueue, shuffled } from "./util";
 
 /** Reads banks and courses, and persists attempts, sessions and lab progress. */
@@ -245,6 +245,26 @@ export class Store {
 			found = true;
 		});
 		return found;
+	}
+
+	/**
+	 * Moves highlight answers from a note's old path to its new one — or, for
+	 * a folder, from every note under it. Returns how many answers moved.
+	 */
+	async moveHighlightHistory(from: string, to: string, folder: boolean): Promise<number> {
+		const oldId = highlightBankId(from);
+		const newId = highlightBankId(to);
+		let moved = 0;
+		await this.update((data) => {
+			for (const a of data.attempts) {
+				if (a.bankId === oldId && !folder) a.bankId = newId;
+				else if (folder && a.bankId.startsWith(`${oldId}/`)) a.bankId = newId + a.bankId.slice(oldId.length);
+				else continue;
+				moved += 1;
+			}
+			return moved > 0;
+		});
+		return moved;
 	}
 
 	/** Keeps finished days' records. A day already kept is never changed. */

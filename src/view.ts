@@ -549,13 +549,14 @@ export class RecallLabView extends ItemView {
 		const examPanel = main.createDiv({ cls: "rl-panel" });
 		examPanel.createEl("h3", { text: "Course exam" });
 		const allQ = courseBanks.reduce((n, b) => n + b.questions.length, 0);
-		examPanel.createDiv({ cls: "rl-muted", text: `One paper that ramps from recall to application to synthesis, drawn across all ${courseBanks.length} quiz${courseBanks.length === 1 ? "" : "zes"} (${allQ} questions).` });
+		const highlighted = this.highlightsIn(folder).reduce((n, b) => n + b.questions.length, 0);
+		examPanel.createDiv({ cls: "rl-muted", text: `One paper that ramps from recall to application to synthesis, drawn across all ${courseBanks.length} quiz${courseBanks.length === 1 ? "" : "zes"} (${allQ} questions${highlighted ? `, and ${highlighted} from your highlights` : ""}).` });
 		const ea = examPanel.createDiv({ cls: "rl-actions" });
 		if (courseBanks.length) {
 			new ButtonComponent(ea).setButtonText(`Start exam (${this.plugin.settings.defaultLength})`).setCta()
 				.onClick(() => void this.beginCourseExam(course, courseBanks, this.plugin.settings.defaultLength));
 			new ButtonComponent(ea).setButtonText("Full exam (everything)")
-				.onClick(() => void this.beginCourseExam(course, courseBanks, allQ));
+				.onClick(() => void this.beginCourseExam(course, courseBanks, "all"));
 		} else {
 			examPanel.createDiv({ cls: "rl-muted", text: "No quizzes yet — generate one from a note below." });
 		}
@@ -709,7 +710,7 @@ export class RecallLabView extends ItemView {
 
 	// ================================================================ exam
 
-	private async beginCourseExam(course: Course, banks: Bank[], total: number): Promise<void> {
+	private async beginCourseExam(course: Course, banks: Bank[], total: number | "all"): Promise<void> {
 		const progress = await this.plugin.store.readProgress();
 		// One virtual paper across the course. Each question keeps its own bank,
 		// so its answer is recorded against that bank, not the paper.
@@ -720,7 +721,7 @@ export class RecallLabView extends ItemView {
 			questions: [],
 		};
 		const items = Store.itemsOf([...banks, ...this.highlightsIn(course.folder)]);
-		const picked = total >= items.length
+		const picked = total === "all" || total >= items.length
 			? Store.fullExam(items)
 			: Store.pickExam(items, new AnswerIndex(progress.attempts), total);
 		await this.launch(merged, picked);
@@ -816,18 +817,25 @@ export class RecallLabView extends ItemView {
 		// Saying how sure you are tunes the schedule: a lucky guess comes back
 		// soon, a quick sure answer goes further out. Submit claims neither.
 		const actions = card.createDiv({ cls: "rl-actions" });
-		new ButtonComponent(actions).setButtonText("Guessing")
-			.setTooltip("Even if it is right, a guess comes back soon")
-			.onClick(() => void this.submit(item, state, wrap, false, "guess"));
+		// A trace shows each step's answer as it is checked, so by Submit you
+		// know how you did: saying how sure you were would only inflate it.
+		const askSure = q.type !== "trace";
+		if (askSure) {
+			new ButtonComponent(actions).setButtonText("Guessing")
+				.setTooltip("Even if it is right, a guess comes back soon")
+				.onClick(() => void this.submit(item, state, wrap, false, "guess"));
+		}
 		const submit = new ButtonComponent(actions).setButtonText("Submit").setCta()
 			.onClick(() => void this.submit(item, state, wrap, false, "unsure"));
-		new ButtonComponent(actions).setButtonText("Sure")
-			.setTooltip("Right, sure and quick: it is spaced out further")
-			.onClick(() => void this.submit(item, state, wrap, false, "sure"));
+		if (askSure) {
+			new ButtonComponent(actions).setButtonText("Sure")
+				.setTooltip("Right, sure and quick: it is spaced out further")
+				.onClick(() => void this.submit(item, state, wrap, false, "sure"));
+		}
 		const written = q.type === "short" || q.type === "command" || q.type === "image";
 		const giveUp = () => { state.text = ""; void this.submit(item, state, wrap, true); };
 		if (written) new ButtonComponent(actions).setButtonText("I don't know").onClick(giveUp);
-		actions.createSpan({ cls: "rl-hint", text: "Guessing or sure? Saying so tunes when this comes back." });
+		if (askSure) actions.createSpan({ cls: "rl-hint", text: "Guessing or sure? Saying so tunes when this comes back." });
 		const mod = Platform.isMacOS ? "⌘" : "Ctrl";
 		actions.createDiv({
 			cls: "rl-keys",
@@ -835,7 +843,9 @@ export class RecallLabView extends ItemView {
 				? `Keys: 1–${Math.min(9, options.length)} choose · Enter submit · G guessing · S sure`
 				: q.type === "order"
 					? "Keys: Enter submit · G guessing · S sure"
-					: `Keys: ${mod}+Enter submit · Esc leaves the box, then G guessing · S sure${written ? " · D don't know" : ""}`,
+					: q.type === "trace"
+						? "Keys: Enter moves to the next box and checks a full step"
+						: `Keys: ${mod}+Enter submit · Esc leaves the box, then G guessing · S sure${written ? " · D don't know" : ""}`,
 		});
 
 		this.examKeys = {
@@ -995,33 +1005,43 @@ export class RecallLabView extends ItemView {
 	private renderOrder(q: Question, el: HTMLElement, state: AnswerState): void {
 		const items = q.items ?? [];
 		state.order = scrambled(items.length);
+		state.orderStart = state.order.slice();
 		el.createDiv({ cls: "rl-hint", text: "Put these in order: drag them, or use the arrows." });
 		const list = el.createDiv({ cls: "rl-order" });
-		const draw = () => {
+		/** Our own drag type, so text or a file dropped from elsewhere is ignored. */
+		const DRAG = "application/x-recall-lab-order";
+		const draw = (focus?: { pos: number; dir: "up" | "down" }) => {
 			list.empty();
 			const order = state.order!;
 			order.forEach((original, pos) => {
 				const row = list.createDiv({ cls: "rl-order-item", attr: { draggable: "true" } });
 				row.createSpan({ cls: "rl-order-pos", text: String(pos + 1) });
 				void this.md(items[original], row.createDiv({ cls: "rl-order-text" }));
-				const move = (to: number) => {
+				const move = (to: number, dir: "up" | "down") => {
 					if (this.revealed || to < 0 || to >= order.length) return;
 					const [it] = order.splice(pos, 1);
 					order.splice(to, 0, it);
-					draw();
+					// Redrawing removes the button that had focus; put it back on
+					// the moved item, so the arrows and the exam keys keep working.
+					draw({ pos: to, dir });
 				};
 				const up = row.createEl("button", { cls: "rl-order-btn", text: "↑", attr: { "aria-label": "Move up" } });
 				const down = row.createEl("button", { cls: "rl-order-btn", text: "↓", attr: { "aria-label": "Move down" } });
 				up.disabled = pos === 0;
 				down.disabled = pos === order.length - 1;
-				up.onclick = () => move(pos - 1);
-				down.onclick = () => move(pos + 1);
-				row.ondragstart = (e) => e.dataTransfer?.setData("text/plain", String(pos));
+				up.onclick = () => move(pos - 1, "up");
+				down.onclick = () => move(pos + 1, "down");
+				if (focus?.pos === pos) {
+					const want = focus.dir === "up" ? up : down;
+					(want.disabled ? (want === up ? down : up) : want).focus();
+				}
+				row.ondragstart = (e) => e.dataTransfer?.setData(DRAG, String(pos));
 				row.ondragover = (e) => e.preventDefault();
 				row.ondrop = (e) => {
 					e.preventDefault();
-					const from = Number(e.dataTransfer?.getData("text/plain"));
-					if (Number.isNaN(from) || from === pos || this.revealed) return;
+					const raw = e.dataTransfer?.getData(DRAG);
+					const from = raw ? Number(raw) : NaN;
+					if (!Number.isInteger(from) || from < 0 || from >= order.length || from === pos || this.revealed) return;
 					const [it] = order.splice(from, 1);
 					order.splice(pos, 0, it);
 					draw();
@@ -1102,7 +1122,13 @@ export class RecallLabView extends ItemView {
 				});
 				input.oninput = () => { state.cells![s][k] = input.value; };
 				input.onkeydown = (e) => {
-					if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); check(); }
+					if (e.key !== "Enter" || e.metaKey || e.ctrlKey) return;
+					e.preventDefault();
+					// Enter moves on to the next empty cell; a step is checked
+					// only once every cell has something in it.
+					const empty = inputs.findIndex((x, i) => i !== k && !x.value.trim());
+					if (empty >= 0) inputs[empty].focus();
+					else if (input.value.trim()) check();
 				};
 				return input;
 			});
@@ -1140,7 +1166,7 @@ export class RecallLabView extends ItemView {
 		this.revealed = true;
 		const ms = Date.now() - this.questionStart;
 		const extra: Pick<Attempt, "confidence" | "recalled"> = {};
-		if (confidence) extra.confidence = confidence;
+		if (confidence && q.type !== "trace") extra.confidence = confidence;
 		if (state.recalled !== undefined) extra.recalled = state.recalled;
 
 		const local = gaveUp
@@ -1796,6 +1822,6 @@ function clamp(n: number): number {
 function inlineText(parent: HTMLElement, text: string): void {
 	for (const part of text.split(/(`[^`]+`)/)) {
 		if (/^`[^`]+`$/.test(part)) parent.createEl("code", { text: part.slice(1, -1) });
-		else if (part) parent.appendText(part.replace(/\*\*|__|\[\[|\]\]/g, ""));
+		else if (part) parent.appendText(plain(part));
 	}
 }

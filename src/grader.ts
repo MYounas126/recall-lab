@@ -14,6 +14,8 @@ export interface Response {
 	chosen: number[];
 	/** order: original item indices, in the order you arranged them. */
 	order?: number[];
+	/** order: the order the items were first shown in, before you moved any. */
+	orderStart?: number[];
 	/** match: for each left-hand item, the pair whose right side you chose; -1 for none. */
 	matches?: number[];
 	/** cloze: what you typed in each blank. */
@@ -35,7 +37,7 @@ export function gradeLocally(q: Question, r: Response): LocalResult | null {
 		case "hotspot":
 			return gradeHotspot(q, r.chosen);
 		case "order":
-			return gradeOrder(q, r.order ?? []);
+			return gradeOrder(q, r.order ?? [], r.orderStart);
 		case "match":
 			return gradeMatch(q, r.matches ?? []);
 		case "cloze":
@@ -91,11 +93,19 @@ export function longestInOrder(seq: number[]): number {
 /**
  * Order the steps: credit for the longest stretch you had in the right
  * relative order, so one step put in early costs one step, not everything
- * after it.
+ * after it. Only the improvement on the order the items were shown in
+ * counts: a shuffle already has a stretch in order, and submitting it
+ * untouched must not pass.
  */
-function gradeOrder(q: Question, order: number[]): LocalResult {
+function gradeOrder(q: Question, order: number[], start?: number[]): LocalResult {
 	const items = q.items ?? [];
-	const score = items.length && order.length === items.length ? Math.round((longestInOrder(order) / items.length) * 100) : 0;
+	const n = items.length;
+	let score = 0;
+	if (n && order.length === n) {
+		const got = longestInOrder(order);
+		const base = start?.length === n ? longestInOrder(start) : 0;
+		score = got === n ? 100 : base >= n ? 0 : Math.round((Math.max(0, got - base) / (n - base)) * 100);
+	}
 	return result(q, score, `The order is:\n${items.map((it, i) => `${i + 1}. ${it}`).join("\n")}`);
 }
 
@@ -153,24 +163,42 @@ export function parseValue(s: string): bigint | null {
 	return neg ? -v : v;
 }
 
-function wrapTo(x: bigint, bits: number): bigint {
+/** A negative value as the bits it leaves in a register this wide. */
+function unsigned(x: bigint, bits: number): bigint {
+	if (x >= BigInt(0)) return x;
 	const m = BigInt(2) ** BigInt(bits);
 	return ((x % m) + m) % m;
 }
 
 /**
+ * How wide a register is, from its name: x86 (rax 64, eax 32, ax 16, al 8),
+ * ARM (x0 64, w0 32) and the flags (1 bit). Null for any other name, such as
+ * a C variable, or a name that differs between architectures, such as sp.
+ */
+export function registerWidth(name: string): number | null {
+	const n = name.trim().toLowerCase();
+	if (/^r([abcd]x|si|di|bp|ip)$/.test(n) || /^r(8|9|1[0-5])$/.test(n) || /^x([0-9]|[12][0-9]|30)$/.test(n)) return 64;
+	if (/^e([abcd]x|si|di|sp|bp|ip)$/.test(n) || /^r(8|9|1[0-5])d$/.test(n) || /^w([0-9]|[12][0-9]|30)$/.test(n)) return 32;
+	if (/^[abcd]x$/.test(n) || /^r(8|9|1[0-5])w$/.test(n)) return 16;
+	if (/^[abcd][lh]$/.test(n) || /^(sil|dil|spl|bpl)$/.test(n) || /^r(8|9|1[0-5])b$/.test(n)) return 8;
+	if (/^[czsopad]f$/.test(n)) return 1;
+	return null;
+}
+
+/**
  * Whether a typed value matches the expected one. Numbers compare by value
  * whatever their base, so 16, 0x10 and 10h agree; BigInt keeps 64-bit
- * registers exact. -1 and 0xFFFFFFFF are the same bits in a 32-bit register,
- * so a negative answer counts if it matches at 32 or 64 bits. Anything else
- * compares as text, ignoring case.
+ * registers exact. A negative number is read as the bits it leaves in the
+ * register named, so -1 is 0xFFFFFFFF in eax but not in rax — the
+ * zero-extension a trace is often testing. Without a known register width,
+ * numbers must match exactly. Anything else compares as text, ignoring case.
  */
-export function sameValue(given: string, want: string): boolean {
+export function sameValue(given: string, want: string, register = ""): boolean {
 	const a = parseValue(given);
 	const b = parseValue(want);
 	if (a !== null && b !== null) {
-		if (a === b) return true;
-		return (a < 0 || b < 0) && [32, 64].some((bits) => wrapTo(a, bits) === wrapTo(b, bits));
+		const bits = registerWidth(register);
+		return bits === null ? a === b : unsigned(a, bits) === unsigned(b, bits);
 	}
 	const n = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
 	return n(given) !== "" && n(given) === n(want);
@@ -183,7 +211,7 @@ function gradeTrace(q: Question, cells: string[][]): LocalResult {
 	(q.trace ?? []).forEach((step, s) => {
 		Object.entries(step.expect).forEach(([name, want], k) => {
 			total += 1;
-			if (!sameValue(cells[s]?.[k] ?? "", want)) wrong.push(`after line ${step.line}, **${name}** = \`${want}\``);
+			if (!sameValue(cells[s]?.[k] ?? "", want, name)) wrong.push(`after line ${step.line}, **${name}** = \`${want}\``);
 		});
 	});
 	const score = total ? Math.round(((total - wrong.length) / total) * 100) : 0;

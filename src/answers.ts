@@ -49,9 +49,31 @@ export function describeResponse(q: Question, s: AnswerState): string {
 }
 
 
-/** Markdown reduced to plain text, for places that cannot render it, such as a dropdown. */
+/** Inline code spans: a run of backticks, the code, and the same run again. */
+const CODE_SPAN = /(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/g;
+
+/**
+ * Markdown reduced to the text it shows, for places that cannot render it,
+ * such as a dropdown or a blank's answer. Code keeps its contents, a link
+ * its text, and emphasis markers go only where they pair up, so PROT_EXEC
+ * and `*rsp` stay as written.
+ */
 export function plain(text: string): string {
-	return text.replace(/[`*_]|\[\[|\]\]/g, "");
+	const code: string[] = [];
+	const masked = text.replace(CODE_SPAN, (_m, _ticks: string, inner: string) => {
+		code.push(inner.trim());
+		return `\uE000${code.length - 1}\uE001`;
+	});
+	const shown = masked
+		.replace(/!?\[\[[^\]|]*\|([^\]]*)\]\]/g, "$1")
+		.replace(/!?\[\[([^\]]*)\]\]/g, (_m, target: string) => target.replace(/#\^?/g, " > "))
+		.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+		.replace(/(\*\*|__)(?=\S)([\s\S]*?\S)\1/g, "$2")
+		.replace(/(?<!\*)\*(?=[^\s*])([\s\S]*?[^\s*])\*(?!\*)/g, "$1")
+		.replace(/(?<![\p{L}\p{N}_])_(?=[^\s_])([\s\S]*?[^\s_])_(?![\p{L}\p{N}_])/gu, "$1")
+		.replace(/~~(?=\S)([\s\S]*?\S)~~/g, "$1")
+		.replace(/==(?=\S)([\s\S]*?\S)==/g, "$1");
+	return shown.replace(/\uE000(\d+)\uE001/g, (_m, i: string) => code[Number(i)]);
 }
 
 /** The positions 0…n-1 in a random order other than the right one, when there is another. */

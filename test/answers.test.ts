@@ -49,4 +49,15 @@ test("blank widths come in steps, so they do not give the answer's length away",
 test("plain text drops markdown a dropdown cannot show", () => {
 	assert.equal(plain("`RAX` is **wide**"), "RAX is wide");
 	assert.equal(plain("[[Note]]"), "Note");
+	assert.equal(plain("[[Return-oriented programming|ROP]] and [docs](https://x.y)"), "ROP and docs");
+	assert.equal(plain("*leaked* and _gone_"), "leaked and gone");
+});
+
+test("plain text keeps markers that are not markdown", () => {
+	assert.equal(plain("PROT_EXEC"), "PROT_EXEC");
+	assert.equal(plain("`__libc_start_main`"), "__libc_start_main");
+	assert.equal(plain("__libc_start_main"), "__libc_start_main");
+	assert.notEqual(plain("`*rsp`"), plain("`rsp`"), "a dereference stays visible");
+	assert.equal(plain("`*rsp`"), "*rsp");
+	assert.equal(plain("2 * 3 * 4"), "2 * 3 * 4");
 });

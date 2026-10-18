@@ -33,6 +33,24 @@ test("a broken hands-on question is dropped, not the whole bank", () => {
 	assert.equal(bank.questions[0], fine);
 });
 
+test("hands-on answers are tidied: lines once each, numbers from strings, no rounded values", () => {
+	const hot = question("h", { type: "hotspot", code: "a\nb\nc", lines: [2, 2, "3"] as never });
+	assert.equal(checkInteractive(hot), null);
+	assert.deepEqual(hot.lines, [2, 3]);
+	const trace = (expect: Record<string, unknown>) =>
+		question("t", { type: "trace", code: "mov rax, 1", trace: [{ line: "1" as never, expect: expect as never }] });
+	const fine = trace({ rax: 1 });
+	assert.equal(checkInteractive(fine), null);
+	assert.deepEqual(fine.trace, [{ line: 1, expect: { rax: "1" } }]);
+	assert.match(checkInteractive(trace({ rax: 18446744073709552000 }))!, /too large/);
+	assert.equal(checkInteractive(trace({ rax: "0xffffffffffffffff" })), null);
+});
+
+test("match answers must differ as the dropdown shows them", () => {
+	const q = question("m", { type: "match", pairs: [["a", "`*rsp`"], ["b", "`rsp`"], ["c", "**rsp**"]] });
+	assert.match(checkInteractive(q)!, /same answer/);
+});
+
 test("a bank of nothing but broken questions is rejected", () => {
 	const bank: Bank = { id: "b", title: "B", questions: [question("q1", { type: "match", pairs: [] })] };
 	assert.match(validateBank(bank, course)!, /usable/);

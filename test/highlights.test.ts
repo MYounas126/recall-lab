@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import { strict as assert } from "node:assert";
-import { hashText, highlightBank, highlightQuestions } from "../src/highlights";
+import { highlightBank, highlightQuestions } from "../src/highlights";
+import { hashText } from "../src/util";
 import { Store } from "../src/store";
 import { gradeLocally } from "../src/grader";
 import { makeVault } from "./helpers";
@@ -49,6 +50,55 @@ test("ids come from the text, so they survive a reload and change with an edit",
 	assert.equal(edited[0].id, first[0]);
 	assert.match(first[0], /^hl-[0-9a-f]{8}$/);
 	assert.equal(hashText("abc"), hashText("abc"));
+});
+
+test("only what Obsidian draws as a highlight becomes a blank", () => {
+	const note = [
+		"In JavaScript, `0 == '0'` is true but `0 === '0'` is false, so prefer strict equality.",
+		"The check if (ret == -1) catches the failed call before anything else runs.",
+		"The key a2V5MTIzNA== decodes to key1234 and nothing in it is secret at all.",
+		"The ==stack pointer== is decremented by push before the value is written to memory.",
+	].join("\n");
+	assert.deepEqual(highlightQuestions("a.md", note).map((q) => q.cloze), [
+		"The {{stack pointer}} is decremented by push before the value is written to memory.",
+	]);
+});
+
+test("a blank's answer is the text as it shows", () => {
+	const note = [
+		"Writing to ==**EAX**== clears the upper half of the full register every time.",
+		"The gadget chain is called ==`pop rdi; ret`== in most write-ups about exploits.",
+		"See ==[[Return-oriented programming|ROP]]== for how gadgets chain into a program.",
+		"Pipe the output with ==cmd | grep x== to keep only the lines that matter here.",
+		"Templates like {{7*7}} with ==SSTI== evaluate on the server side before rendering.",
+	].join("\n");
+	const qs = highlightQuestions("a.md", note);
+	assert.deepEqual(qs.map((q) => q.cloze), [
+		"Writing to {{EAX}} clears the upper half of the full register every time.",
+		"The gadget chain is called {{pop rdi; ret}} in most write-ups about exploits.",
+		"See {{ROP}} for how gadgets chain into a program.",
+	]);
+	assert.equal(gradeLocally(qs[0], { text: "", chosen: [], blanks: ["EAX"] })!.verdict, "correct");
+});
+
+test("tables, callout headers and task boxes are not sentences", () => {
+	const note = [
+		"| ==RAX== | the accumulator register, used for return values |",
+		"> [!tip] ==RSP== must stay 16-byte aligned before every call instruction.",
+		"> > Nested: the ==red zone== is 128 bytes below the stack pointer on Linux.",
+		"- [ ] Remember that ==syscall== clobbers rcx and r11 on every single call.",
+	].join("\n");
+	assert.deepEqual(highlightQuestions("a.md", note).map((q) => q.cloze), [
+		"{{RSP}} must stay 16-byte aligned before every call instruction.",
+		"Nested: the {{red zone}} is 128 bytes below the stack pointer on Linux.",
+		"Remember that {{syscall}} clobbers rcx and r11 on every single call.",
+	]);
+});
+
+test("a sentence's code is kept as code around the blanks", () => {
+	const [q] = highlightQuestions("a.md", "Calling `mprotect` with ==PROT_EXEC== makes the page executable again.");
+	assert.equal(q.cloze, "Calling `mprotect` with {{PROT_EXEC}} makes the page executable again.");
+	assert.equal(q.explain, "Calling `mprotect` with **PROT_EXEC** makes the page executable again.");
 });
 
 test("a note without highlights has no highlight bank", () => {

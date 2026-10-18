@@ -5,6 +5,7 @@ import { Bank, Course, Lab, Question, QuestionType, Verdict } from "./types";
 import { hashFlag, validateLab, detectToolchain, describeToolchain } from "./labs";
 import type { Strictness } from "./settings";
 import { hashText } from "./util";
+import { plain } from "./answers";
 
 export interface MarkResult {
 	score: number;
@@ -507,6 +508,11 @@ function normaliseChoice(c: string): string {
 	return String(c).toLowerCase().replace(/[`*_]/g, "").replace(/\s+/g, " ").trim();
 }
 
+/** A whole number written as a string, read as a number; anything else as it was. */
+function asNumber(v: unknown): number {
+	return typeof v === "string" && /^\s*\d+\s*$/.test(v) ? Number(v) : (v as number);
+}
+
 const TYPES: readonly QuestionType[] = [
 	"mcq", "multi", "short", "command", "image", "hotspot", "trace", "order", "match", "cloze",
 ];
@@ -522,15 +528,23 @@ export function checkInteractive(q: Question): string | null {
 		case "hotspot":
 			if (!q.code?.trim()) return "has no code to click";
 			if (!Array.isArray(q.lines) || !q.lines.length) return "has no answer lines";
+			q.lines = [...new Set(q.lines.map(asNumber))];
 			if (q.lines.some((l) => !Number.isInteger(l) || l < 1 || l > codeLines)) return "points at a line outside its code";
 			return null;
 		case "trace":
 			if (!q.code?.trim()) return "has no code to step through";
 			if (!Array.isArray(q.trace) || !q.trace.length) return "has no steps";
 			for (const step of q.trace) {
+				if (step) step.line = asNumber(step.line);
 				if (!Number.isInteger(step?.line) || step.line < 1 || step.line > codeLines) return "has a step outside its code";
 				if (!step.expect || typeof step.expect !== "object" || !Object.keys(step.expect).length) {
 					return "has a step with nothing to fill in";
+				}
+				// JSON numbers past 2^53 were already rounded when the file was
+				// parsed, and a 64-bit register needs every bit.
+				const values = Object.values(step.expect as Record<string, unknown>);
+				if (values.some((v) => typeof v === "number" && !Number.isSafeInteger(v) && Number.isInteger(v))) {
+					return "has a value too large to read exactly (write it as a string)";
 				}
 				step.expect = Object.fromEntries(Object.entries(step.expect).map(([k, v]) => [k, String(v)]));
 			}
@@ -544,7 +558,9 @@ export function checkInteractive(q: Question): string | null {
 			if (!Array.isArray(q.pairs) || q.pairs.length < 3) return "needs at least three pairs";
 			if (q.pairs.some((p) => !Array.isArray(p) || p.length !== 2)) return "has a malformed pair";
 			q.pairs = q.pairs.map(([l, r]) => [String(l), String(r)]);
-			if (new Set(q.pairs.map(([, r]) => r.trim().toLowerCase())).size !== q.pairs.length) {
+			// Compared as the dropdown shows them: `*rsp` and `rsp` must not
+			// both read rsp.
+			if (new Set(q.pairs.map(([, r]) => plain(r).trim().toLowerCase())).size !== q.pairs.length) {
 				return "has two pairs with the same answer";
 			}
 			return null;

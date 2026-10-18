@@ -127,8 +127,10 @@ Quizzes built before this get them when rebuilt, which uses Claude.
 
 **Fill in your highlights.** Every sentence with `==highlighted==` text in a
 course note becomes a fill-in-the-blank question, made on your device with no
-Claude involved. They join that note's exams and your reviews, and change when
-you edit the highlight (Settings → Questions).
+Claude involved. They join that note's exams and your reviews (Settings →
+Questions). Each one keeps its history until you edit that sentence; renaming
+or moving the note keeps it too. Highlights inside code, table rows and
+sentences containing `{`, `}` or `|` are left alone.
 
 ## Files it uses, all inside your vault
 
