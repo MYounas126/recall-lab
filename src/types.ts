@@ -64,6 +64,21 @@ export interface Bank {
 	questions: Question[];
 }
 
+/**
+ * A question's identity across the whole vault. Question ids are only unique
+ * within their bank — generated banks all number theirs q1, q2… — so anything
+ * tracked per question must key on the bank as well.
+ */
+export function qkey(bankId: string, questionId: string): string {
+	return `${bankId}::${questionId}`;
+}
+
+/** A question paired with the bank it belongs to, as an exam asks it. */
+export interface ExamItem {
+	bankId: string;
+	q: Question;
+}
+
 export type Verdict = "correct" | "partial" | "incorrect";
 
 export interface Attempt {

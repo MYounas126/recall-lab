@@ -4,7 +4,8 @@ import { Store } from "./store";
 import { gradeLocally } from "./grader";
 import { shuffled } from "./util";
 import { renderRadar, scoreAxes, scoreCourses, weakestTested, untested, AxisScore } from "./radar";
-import { Attempt, Bank, Course, Lab, LabProgress, Question, SessionSummary, Tier, labScore, letterGrade } from "./types";
+import { Attempt, Bank, Course, ExamItem, Lab, LabProgress, Question, SessionSummary, Tier, labScore, letterGrade } from "./types";
+import { AnswerIndex } from "./history";
 import { checkFlag } from "./labs";
 import { INSTALL_HINT } from "./claude";
 
@@ -27,6 +28,8 @@ interface AnswerState {
 
 interface LiveAnswer {
 	q: Question;
+	/** The bank the question came from, which a course exam mixes. */
+	bankId: string;
 	response: string;
 	image?: string;
 	attempt?: Attempt;
@@ -46,8 +49,9 @@ export class RecallLabView extends ItemView {
 	private allLabs: Lab[] = [];
 	private openLab: Lab | null = null;
 
+	/** The paper being sat: a note's bank, or a course's banks merged. */
 	private bank: Bank | null = null;
-	private examQuestions: Question[] = [];
+	private examItems: ExamItem[] = [];
 	private index = 0;
 	private answers: LiveAnswer[] = [];
 	private sessionId = "";
@@ -212,7 +216,8 @@ export class RecallLabView extends ItemView {
 		}
 
 		// The central radar: one spoke per course, across the whole vault.
-		const scores = scoreCourses(this.courses, (c) => Store.banksForCourse(c, this.banks), progress.attempts);
+		const index = new AnswerIndex(progress.attempts);
+		const scores = scoreCourses(this.courses, (c) => Store.banksForCourse(c, this.banks), index);
 		const overall = scores.length ? Math.round(scores.reduce((s, a) => s + a.score, 0) / scores.length) : 0;
 
 		const panel = main.createDiv({ cls: "rl-panel rl-panel-hero" });
@@ -235,7 +240,7 @@ export class RecallLabView extends ItemView {
 			const card = main.createDiv({ cls: "rl-panel" });
 			const ch = card.createDiv({ cls: "rl-panel-head" });
 			ch.createEl("h3", { text: course.title });
-			const inner = scoreAxes(course, courseBanks, progress.attempts);
+			const inner = scoreAxes(course, courseBanks, index);
 			const cm = inner.filter((a) => a.total).length
 				? Math.round(inner.filter((a) => a.total).reduce((s, a) => s + a.score, 0) / inner.filter((a) => a.total).length)
 				: 0;
@@ -316,7 +321,7 @@ export class RecallLabView extends ItemView {
 		}
 
 		const courseBanks = Store.banksForCourse(course, this.banks);
-		const scores = scoreAxes(course, courseBanks, progress.attempts);
+		const scores = scoreAxes(course, courseBanks, new AnswerIndex(progress.attempts));
 		const tested = scores.filter((a) => a.total > 0 && a.seen > 0);
 		const overall = tested.length ? Math.round(tested.reduce((s, a) => s + a.score, 0) / tested.length) : 0;
 
@@ -503,31 +508,34 @@ export class RecallLabView extends ItemView {
 
 	private async beginCourseExam(course: Course, banks: Bank[], total: number): Promise<void> {
 		const progress = await this.plugin.store.readProgress();
-		// Merge the course's banks into one virtual paper.
+		// One virtual paper across the course. Each question keeps its own bank,
+		// so its answer is recorded against that bank, not the paper.
 		const merged: Bank = {
 			id: `course:${course.id}`,
 			title: course.title,
 			note: course.folder,
-			questions: banks.flatMap((b) => b.questions),
+			questions: [],
 		};
-		const picked = total >= merged.questions.length
-			? Store.fullExam(merged)
-			: Store.pickExam(merged, progress.attempts, total);
+		const items = Store.itemsOf(banks);
+		const picked = total >= items.length
+			? Store.fullExam(items)
+			: Store.pickExam(items, new AnswerIndex(progress.attempts), total);
 		await this.launch(merged, picked);
 	}
 
 	private async beginExam(bank: Bank, full: boolean): Promise<void> {
 		const progress = await this.plugin.store.readProgress();
+		const items = Store.itemsOf([bank]);
 		const picked = full
-			? Store.fullExam(bank)
-			: Store.pickExam(bank, progress.attempts, Math.min(this.plugin.settings.defaultLength, bank.questions.length));
+			? Store.fullExam(items)
+			: Store.pickExam(items, new AnswerIndex(progress.attempts), Math.min(this.plugin.settings.defaultLength, items.length));
 		await this.launch(bank, picked);
 	}
 
-	private async launch(bank: Bank, picked: Question[]): Promise<void> {
+	private async launch(bank: Bank, picked: ExamItem[]): Promise<void> {
 		if (!picked.length) { new Notice("Recall Lab: that quiz has no questions."); return; }
 		this.bank = bank;
-		this.examQuestions = picked;
+		this.examItems = picked;
 		this.index = 0;
 		this.answers = [];
 		this.sessionId = `s-${Date.now().toString(36)}`;
@@ -538,18 +546,19 @@ export class RecallLabView extends ItemView {
 	}
 
 	private async renderExam(root: HTMLElement): Promise<void> {
-		const q = this.examQuestions[this.index];
-		if (!q || !this.bank) { this.screen = "home"; await this.render(); return; }
+		const item = this.examItems[this.index];
+		if (!item || !this.bank) { this.screen = "home"; await this.render(); return; }
+		const q = item.q;
 
 		const wrap = root.createDiv({ cls: "rl-exam" });
 		const bar = wrap.createDiv({ cls: "rl-sessionbar" });
 		bar.createSpan({ cls: "rl-crumb", text: this.bank.title });
 		bar.createSpan({ cls: `rl-tier-badge rl-tier-${q.tier}`, text: tierLabel(q.tier) });
-		bar.createSpan({ cls: "rl-count", text: `${this.index + 1} / ${this.examQuestions.length}` });
+		bar.createSpan({ cls: "rl-count", text: `${this.index + 1} / ${this.examItems.length}` });
 		const quit = bar.createEl("a", { cls: "rl-link rl-quit", text: "End exam" });
 		quit.onclick = (e) => { e.preventDefault(); void this.finish(); };
 		const track = bar.createDiv({ cls: "rl-progress rl-progress-slim" });
-		track.createDiv({ cls: "rl-progress-fill" }).setCssProps({ "--rl-fill": `${(this.index / this.examQuestions.length) * 100}%` });
+		track.createDiv({ cls: "rl-progress-fill" }).setCssProps({ "--rl-fill": `${(this.index / this.examItems.length) * 100}%` });
 
 		const card = wrap.createDiv({ cls: "rl-question" });
 		const meta = card.createDiv({ cls: "rl-qmeta" });
@@ -564,10 +573,10 @@ export class RecallLabView extends ItemView {
 
 		const actions = card.createDiv({ cls: "rl-actions" });
 		const submit = new ButtonComponent(actions).setButtonText("Submit").setCta()
-			.onClick(() => void this.submit(q, state, wrap));
+			.onClick(() => void this.submit(item, state, wrap));
 		if (q.type === "short" || q.type === "command" || q.type === "image") {
 			new ButtonComponent(actions).setButtonText("I don't know")
-				.onClick(() => { state.text = ""; void this.submit(q, state, wrap, true); });
+				.onClick(() => { state.text = ""; void this.submit(item, state, wrap, true); });
 		}
 		submit.buttonEl.focus();
 	}
@@ -633,7 +642,8 @@ export class RecallLabView extends ItemView {
 		window.setTimeout(() => area.focus(), 0);
 	}
 
-	private async submit(q: Question, state: AnswerState, wrap: HTMLElement, gaveUp = false): Promise<void> {
+	private async submit(item: ExamItem, state: AnswerState, wrap: HTMLElement, gaveUp = false): Promise<void> {
+		const q = item.q;
 		if (this.revealed) return;
 		if ((q.type === "mcq" || q.type === "multi") && !state.chosen.length) { new Notice("Pick an answer first."); return; }
 		this.revealed = true;
@@ -643,9 +653,9 @@ export class RecallLabView extends ItemView {
 			? { score: 0, verdict: "incorrect" as const, feedback: "You skipped this one.", missing: [q.topic] }
 			: gradeLocally(q, state.text, state.chosen);
 
-		const live: LiveAnswer = { q, response: state.text || describeChoice(q, state.chosen), image: state.image, ms };
+		const live: LiveAnswer = { q, bankId: item.bankId, response: state.text || describeChoice(q, state.chosen), image: state.image, ms };
 		if (local) {
-			live.attempt = this.attemptFrom(q, live.response, local.score, local.verdict, local.feedback, local.missing, "local", ms);
+			live.attempt = this.attemptFrom(item, live.response, local.score, local.verdict, local.feedback, local.missing, "local", ms);
 			this.answers.push(live);
 			this.showFeedback(q, live, wrap);
 			return;
@@ -658,23 +668,29 @@ export class RecallLabView extends ItemView {
 		const marked = await this.plugin.tasks.markAnswer(q, state.text, state.image);
 		if ("error" in marked) {
 			this.plugin.log.error("marking failed", { question: q.id, error: marked.error });
-			live.attempt = this.attemptFrom(q, live.response, 0, "incorrect",
+			live.attempt = this.attemptFrom(item, live.response, 0, "incorrect",
 				`Could not reach Claude to mark this: ${marked.error}`, [q.topic], "local", ms);
 		} else {
 			this.plugin.log.info("answer marked", { question: q.id, score: marked.score });
-			live.attempt = this.attemptFrom(q, live.response, marked.score, marked.verdict,
+			live.attempt = this.attemptFrom(item, live.response, marked.score, marked.verdict,
 				[marked.feedback, marked.improve].filter(Boolean).join(" "), marked.missing, "ai", ms);
 		}
 		panel.remove();
 		this.showFeedback(q, live, wrap);
 	}
 
+	/**
+	 * The answer is recorded against the question's own bank — never the
+	 * paper's, which for a course exam is a virtual "course:" id that matches
+	 * no bank, so the answer would never reach the radar.
+	 */
 	private attemptFrom(
-		q: Question, response: string, score: number, verdict: Attempt["verdict"],
+		item: ExamItem, response: string, score: number, verdict: Attempt["verdict"],
 		feedback: string, missing: string[], gradedBy: Attempt["gradedBy"], ms: number
 	): Attempt {
+		const q = item.q;
 		return {
-			ts: new Date().toISOString(), sessionId: this.sessionId, bankId: this.bank!.id,
+			ts: new Date().toISOString(), sessionId: this.sessionId, bankId: item.bankId,
 			questionId: q.id, tier: q.tier, type: q.type, topic: q.topic,
 			response, score, verdict, feedback, missing, gradedBy, ms,
 		};
@@ -725,7 +741,7 @@ export class RecallLabView extends ItemView {
 		}
 
 		const next = panel.createDiv({ cls: "rl-actions" });
-		const last = this.index === this.examQuestions.length - 1;
+		const last = this.index === this.examItems.length - 1;
 		new ButtonComponent(next).setButtonText(last ? "Finish" : "Next").setCta()
 			.onClick(() => void this.advance()).buttonEl.focus();
 		return panel;
@@ -733,7 +749,7 @@ export class RecallLabView extends ItemView {
 
 	private async advance(): Promise<void> {
 		this.revealed = false;
-		if (this.index === this.examQuestions.length - 1) { await this.finish(); return; }
+		if (this.index === this.examItems.length - 1) { await this.finish(); return; }
 		this.index += 1;
 		this.questionStart = Date.now();
 		await this.render();
@@ -762,7 +778,7 @@ export class RecallLabView extends ItemView {
 		let axes: AxisScore[] = [];
 		if (course) {
 			const prior = await this.plugin.store.readProgress();
-			axes = scoreAxes(course, Store.banksForCourse(course, this.banks), [...prior.attempts, ...graded]);
+			axes = scoreAxes(course, Store.banksForCourse(course, this.banks), new AnswerIndex([...prior.attempts, ...graded]));
 		}
 
 		await this.plugin.store.recordSession(graded, summary);
@@ -821,7 +837,7 @@ export class RecallLabView extends ItemView {
 			const list = main.createDiv({ cls: "rl-panel" });
 			list.createEl("h3", { text: "Go back over these" });
 			for (const a of wrong) {
-				const q = this.examQuestions.find((x) => x.id === a.questionId);
+				const q = this.examItems.find((x) => x.bankId === a.bankId && x.q.id === a.questionId)?.q;
 				const row = list.createDiv({ cls: "rl-review-row" });
 				row.createSpan({ cls: "rl-chip", text: a.topic });
 				void this.md(q ? q.prompt.split("\n")[0] : a.questionId, row.createDiv({ cls: "rl-review-q" }));

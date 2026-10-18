@@ -136,4 +136,5 @@ it to Claude. A correct answer phrased unusually must not be failed by a regex.
 npm install
 npm run dev     # watch
 npm run build   # typecheck + minified main.js
+npm test        # unit tests, run under Node with a stand-in for Obsidian
 ```
