@@ -2,6 +2,7 @@ import { App, Notice, normalizePath, TFile } from "obsidian";
 import {
 	Attempt,
 	Bank,
+	BlurtResult,
 	Course,
 	Diagnosis,
 	ExamItem,
@@ -243,6 +244,13 @@ export class Store {
 	async recordSession(summary: SessionSummary): Promise<ProgressFile> {
 		return this.update((data) => {
 			data.sessions.push(summary);
+		});
+	}
+
+	/** Keeps a "write it all down" result. */
+	async saveBlurt(result: BlurtResult): Promise<void> {
+		await this.update((data) => {
+			data.blurts = [...(data.blurts ?? []), result];
 		});
 	}
 

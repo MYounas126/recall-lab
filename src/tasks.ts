@@ -1,8 +1,9 @@
 import { App, Notice, TFile, normalizePath } from "obsidian";
 import { ClaudeCli } from "./claude";
 import { Store } from "./store";
-import { Attempt, Bank, Course, Diagnosis, Lab, Question, QuestionType, Verdict } from "./types";
+import { Attempt, Bank, BlurtResult, Course, Diagnosis, Lab, Question, QuestionType, Verdict } from "./types";
 import type { Leech } from "./leeches";
+import { blurtPrompt, headingsOf, parseBlurt } from "./blurt";
 import { hashFlag, validateLab, detectToolchain, describeToolchain } from "./labs";
 import type { Strictness } from "./settings";
 import { hashText } from "./util";
@@ -243,6 +244,22 @@ export class Tasks {
 			);
 		}
 		return out;
+	}
+
+	// --------------------------------------------------------- write it down
+
+	/** Compares what you wrote from memory with the note, section by section. */
+	async checkBlurt(notePath: string, written: string): Promise<BlurtResult | { error: string }> {
+		const note = this.app.vault.getAbstractFileByPath(notePath);
+		if (!(note instanceof TFile)) return { error: `${notePath} is not a note.` };
+		const content = await this.app.vault.cachedRead(note);
+		// A note with no headings is one section, named after the note.
+		const sections = headingsOf(content);
+		if (!sections.length) sections.push(note.basename);
+		const res = await this.cli.askJson<unknown>(blurtPrompt(note.basename, content, written, sections), 180000);
+		if (!res.ok) return { error: res.error };
+		const result = parseBlurt(res.data, sections, notePath, new Date());
+		return typeof result === "string" ? { error: `Claude's comparison was not usable: ${result}.` } : result;
 	}
 
 	// ---------------------------------------------------------------- clinic

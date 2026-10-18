@@ -38,6 +38,8 @@ export interface RecallLabSettings {
 	guidedSteps: boolean;
 	/** After a missed written answer, a nudge from Claude and one more try before the model answer. */
 	secondTry: boolean;
+	/** Minutes on the clock for "write it all down". */
+	blurtMinutes: number;
 }
 
 export const DEFAULT_SETTINGS: RecallLabSettings = {
@@ -61,6 +63,7 @@ export const DEFAULT_SETTINGS: RecallLabSettings = {
 	leechThreshold: 4,
 	guidedSteps: true,
 	secondTry: true,
+	blurtMinutes: 3,
 };
 
 export class RecallLabSettingTab extends PluginSettingTab {
@@ -200,6 +203,20 @@ export class RecallLabSettingTab extends PluginSettingTab {
 					this.plugin.settings.guidedSteps = v;
 					await this.plugin.saveSettings();
 				})
+			);
+
+		new Setting(containerEl)
+			.setName("Write it all down: minutes")
+			.setDesc("How long the clock runs when you write down everything you remember about a note before its quiz.")
+			.addSlider((s) =>
+				s
+					.setLimits(1, 10, 1)
+					.setValue(this.plugin.settings.blurtMinutes)
+					.setDynamicTooltip()
+					.onChange(async (v) => {
+						this.plugin.settings.blurtMinutes = v;
+						await this.plugin.saveSettings();
+					})
 			);
 
 		new Setting(containerEl)

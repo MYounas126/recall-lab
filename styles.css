@@ -594,6 +594,12 @@
 .rl-guided .rl-feedback { margin-top: 0.6rem; }
 .rl-unaided { font-weight: 600; }
 .rl-second-try .rl-text { margin: 0.5rem 0; }
+.rl-blurt-clock {
+	text-align: center; margin: 0.6rem 0;
+	font-size: 1.6em; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.rl-blurt-clock.rl-blurt-over { font-size: 1em; color: var(--text-warning); }
+.rl-blurt-text { width: 100%; min-height: 16rem; }
 .rl-lesson { padding-left: 1.4rem; }
 .rl-lesson li { margin: 0.4rem 0; }
 .rl-lesson li p { margin: 0; }
