@@ -84,11 +84,13 @@ export function teachScorePrompt(title: string, content: string, turns: Turn[], 
 export function parseTeachScore(data: unknown, sections: string[], note: string, turns: Turn[], now: Date): TeachResult | string {
 	const d = (data ?? {}) as { score?: unknown; feedback?: unknown; covered?: unknown; missed?: unknown };
 	const byKey = new Map(sections.map((s) => [headingKey(s), s]));
-	const covered = Array.isArray(d.covered) ? d.covered.map(String).map((s) => s.trim()).filter(Boolean) : [];
+	// A point may come as a string or as {"point": "..."}, in either list.
+	const pointOf = (m: unknown) => (typeof m === "string" ? m : String((m as { point?: unknown })?.point ?? "")).trim();
+	const covered = Array.isArray(d.covered) ? d.covered.map(pointOf).filter(Boolean) : [];
 	const missed = Array.isArray(d.missed)
 		? d.missed
 			.map((m) => {
-				const point = String((m as { point?: unknown })?.point ?? "").trim();
+				const point = pointOf(m);
 				const raw = (m as { heading?: unknown })?.heading;
 				const heading = typeof raw === "string" ? byKey.get(headingKey(raw)) : undefined;
 				return point ? { point, ...(heading ? { heading } : {}) } : null;

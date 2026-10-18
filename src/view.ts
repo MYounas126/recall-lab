@@ -626,12 +626,23 @@ export class RecallLabView extends ItemView {
 		}
 	}
 
-	/** Teach it back: explain a note to a curious beginner, played by Claude, then see what you covered. */
+	/**
+	 * Teach it back: explain a note to a curious beginner, played by Claude,
+	 * then see what you covered. A conversation left unscored for the same
+	 * note is picked up again: its replies were paid for.
+	 */
 	async startTeachBack(path: string): Promise<void> {
 		await this.refresh();
-		this.teach = { path, turns: [], draft: "", busy: null, result: null };
+		if (this.teach?.path !== path || this.teach.result) {
+			this.teach = { path, turns: [], draft: "", busy: null, result: null };
+		}
 		this.screen = "teach";
 		await this.render();
+	}
+
+	/** Whether this conversation is the one on screen. */
+	private teaching(t: TeachState): boolean {
+		return this.screen === "teach" && this.teach === t;
 	}
 
 	/** Redraws only if this conversation is still the one on screen. */
@@ -688,18 +699,26 @@ export class RecallLabView extends ItemView {
 			if (asked >= max) { await this.scoreTeach(t); return; }
 			t.busy = "The student is thinking…";
 			await this.redrawTeach(t);
-			const res = await this.plugin.tasks.studentReply(t.path, t.turns, max - asked);
-			t.busy = null;
+			let res: Awaited<ReturnType<typeof this.plugin.tasks.studentReply>>;
+			try {
+				res = await this.plugin.tasks.studentReply(t.path, t.turns, max - asked);
+			} catch (e) {
+				res = { error: String(e) };
+			} finally {
+				t.busy = null;
+			}
 			if ("error" in res) {
 				this.plugin.log.error("teach-back reply failed", { note: t.path, error: res.error });
-				new Notice(`The student could not reply: ${res.error}`, 12000);
+				if (this.teaching(t)) new Notice(`The student could not reply: ${res.error}`, 12000);
 				// Put the text back, so nothing typed is lost.
 				t.draft = t.turns.pop()?.text ?? "";
 				await this.redrawTeach(t);
 				return;
 			}
 			t.turns.push({ who: "student", text: res.reply });
-			if (res.done) await this.scoreTeach(t);
+			// Scored straight away only if you are still here: a conversation
+			// you left waits, reply and all, and scoring it is another request.
+			if (res.done && this.teaching(t)) await this.scoreTeach(t);
 			else await this.redrawTeach(t);
 		};
 		area.onkeydown = (e) => {
@@ -711,7 +730,15 @@ export class RecallLabView extends ItemView {
 			.setCta()
 			.onClick(() => void send());
 		if (t.turns.some((x) => x.who === "you")) {
-			new ButtonComponent(actions).setButtonText("Finish and score (uses Claude)").onClick(() => void this.scoreTeach(t));
+			new ButtonComponent(actions).setButtonText("Finish and score (uses Claude)").onClick(() => {
+				// An answer still in the box is part of what you taught.
+				const last = area.value.trim();
+				if (last) {
+					t.turns.push({ who: "you", text: last });
+					t.draft = "";
+				}
+				void this.scoreTeach(t);
+			});
 		}
 		const mod = Platform.isMacOS ? "⌘" : "Ctrl";
 		actions.createSpan({
@@ -724,18 +751,31 @@ export class RecallLabView extends ItemView {
 	private async scoreTeach(t: TeachState): Promise<void> {
 		t.busy = "Claude is scoring your explanation…";
 		await this.redrawTeach(t);
-		const res = await this.plugin.tasks.scoreTeachBack(t.path, t.turns);
-		t.busy = null;
+		let res: TeachResult | { error: string };
+		try {
+			res = await this.plugin.tasks.scoreTeachBack(t.path, t.turns);
+		} catch (e) {
+			res = { error: String(e) };
+		} finally {
+			t.busy = null;
+		}
 		if ("error" in res) {
 			this.plugin.log.error("teach-back scoring failed", { note: t.path, error: res.error });
-			new Notice(`Could not score it: ${res.error}`, 12000);
+			if (this.teaching(t)) new Notice(`Could not score it: ${res.error}`, 12000);
 			await this.redrawTeach(t);
 			return;
 		}
-		await this.plugin.store.saveTeachBack(res);
 		this.plugin.log.info("taught back", { note: t.path, score: res.score, turns: res.turns });
+		// Shown before it is saved: the score is paid for, and a save that
+		// fails must not hide it.
 		t.result = res;
 		await this.redrawTeach(t);
+		try {
+			await this.plugin.store.saveTeachBack(res);
+		} catch (e) {
+			this.plugin.log.error("could not save a teach-back", { note: t.path, error: String(e) });
+			new Notice(`Recall Lab could not save this score: ${String(e)}`, 12000);
+		}
 	}
 
 	/** What you covered of the note's key points, and what you never got to. */

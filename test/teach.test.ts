@@ -55,6 +55,18 @@ test("a score is checked: clamped, sections held to the note, explanations count
 	assert.match(parseTeachScore({}, [], "n", turns, NOW) as string, /no key points/);
 });
 
+test("key points may come as strings or as {point}, in either list", () => {
+	const turns: Turn[] = [{ who: "you", text: "RAX holds results." }];
+	const r = parseTeachScore(
+		{ covered: [{ point: "RAX holds results" }, "Calls clobber RCX"], missed: ["Writing EAX clears the top half", { point: "" }] },
+		["Registers"], "n.md", turns, new Date(2026, 9, 18)
+	);
+	assert.ok(typeof r === "object");
+	assert.deepEqual(r.covered, ["RAX holds results", "Calls clobber RCX"], "no [object Object]");
+	assert.deepEqual(r.missed, [{ point: "Writing EAX clears the top half" }], "a plain string still counts as missed");
+	assert.equal(r.score, 67, "two of three, not 100%");
+});
+
 test("a whole conversation runs through the tasks without the real CLI", async () => {
 	const vault = makeVault(0);
 	vault.files.set("C/a.md", "# Widths\nEAX zero-extends into RAX.");
