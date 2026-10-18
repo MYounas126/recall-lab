@@ -55,7 +55,8 @@ written into every marking request.
 exam bar) hides the options of multiple-choice and select-all questions until
 you have typed, or just thought of, your answer. Producing an answer builds
 memory better than spotting one; what you typed is shown above the options and
-kept with your answer.
+kept with your answer. Switching it in the exam bar while the options are
+already showing takes effect from the next question.
 
 ## Daily review
 

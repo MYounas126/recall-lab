@@ -746,15 +746,23 @@ export class RecallLabView extends ItemView {
 		bar.createSpan({ cls: `rl-tier-badge rl-tier-${q.tier}`, text: tierLabel(q.tier) });
 		bar.createSpan({ cls: "rl-count", text: `${this.index + 1} / ${this.examItems.length}` });
 		const recallOn = this.plugin.settings.recallFirst;
+		const hidden = optionsHidden(recallOn, q.type, this.recallStage, this.index);
+		/** What is typed in the recall box, while it shows. */
+		let recallText = () => "";
 		if (recallApplies(true, q.type)) {
-			const toggle = bar.createEl("a", { cls: "rl-link", text: `Recall first: ${recallOn ? "on" : "off"}` });
+			const label = () => `Recall first: ${this.plugin.settings.recallFirst ? "on" : "off"}`;
+			const toggle = bar.createEl("a", { cls: "rl-link", text: label() });
 			toggle.setAttr("aria-label", "Hide the options until you have tried to recall the answer");
 			toggle.onclick = async (e) => {
 				e.preventDefault();
 				if (this.revealed) return;
-				this.plugin.settings.recallFirst = !recallOn;
+				this.plugin.settings.recallFirst = !this.plugin.settings.recallFirst;
 				await this.plugin.saveSettings();
-				await this.render();
+				// Turned off mid-recall, the options show and what was typed
+				// stays. With the options already out, a redraw would drop the
+				// pick, so the change starts with the next question.
+				if (hidden) await this.showOptions(recallText());
+				else toggle.setText(label());
 			};
 		}
 		const quit = bar.createEl("a", { cls: "rl-link rl-quit", text: "End exam" });
@@ -770,19 +778,20 @@ export class RecallLabView extends ItemView {
 		await this.md(q.prompt, card.createDiv({ cls: "rl-prompt" }));
 		if (q.code) card.createEl("pre", { cls: "rl-code" }).createEl("code", { text: q.code });
 
-		if (optionsHidden(recallOn, q.type, this.recallStage, this.index)) {
-			this.renderRecallStage(card);
+		if (hidden) {
+			recallText = this.renderRecallStage(card);
 			return;
 		}
 
-		const recalled = this.recallStage?.index === this.index ? this.recallStage.text.trim() : "";
+		const staged = this.recallStage?.index === this.index && this.recallStage.shown;
+		const recalled = staged ? this.recallStage!.text.trim() : undefined;
 		if (recalled) {
 			const quote = card.createDiv({ cls: "rl-model rl-recalled" });
 			quote.createDiv({ cls: "rl-model-label", text: "You recalled" });
 			quote.createDiv({ text: recalled });
 		}
 
-		const state: AnswerState = { chosen: [], text: "", recalled: recalled || undefined };
+		const state: AnswerState = { chosen: [], text: "", recalled };
 		const options = this.renderAnswerWidget(q, card.createDiv({ cls: "rl-answer" }), state);
 
 		// Saying how sure you are tunes the schedule: a lucky guess comes back
@@ -820,10 +829,9 @@ export class RecallLabView extends ItemView {
 	/**
 	 * Recall first: the options stay hidden while you type, or just think of,
 	 * the answer. Showing them keeps what you typed and redraws the question
-	 * with the options under it; the clock keeps running.
+	 * with the options under it. Returns what is typed so far.
 	 */
-	private renderRecallStage(card: HTMLElement): void {
-		const index = this.index;
+	private renderRecallStage(card: HTMLElement): () => string {
 		const stage = card.createDiv({ cls: "rl-recall-stage" });
 		stage.createDiv({
 			cls: "rl-hint",
@@ -834,10 +842,7 @@ export class RecallLabView extends ItemView {
 			attr: { rows: "2", placeholder: "Your answer, from memory" },
 		});
 		const actions = card.createDiv({ cls: "rl-actions" });
-		const reveal = async () => {
-			this.recallStage = { index, text: area.value, shown: true };
-			await this.render();
-		};
+		const reveal = () => this.showOptions(area.value);
 		const show = new ButtonComponent(actions).setButtonText("Show options").setCta().onClick(() => void reveal());
 		const mod = Platform.isMacOS ? "⌘" : "Ctrl";
 		actions.createDiv({ cls: "rl-keys", text: `Keys: ${mod}+Enter shows the options · Esc leaves the box, then Enter` });
@@ -847,6 +852,19 @@ export class RecallLabView extends ItemView {
 			focus: () => show.buttonEl.focus(),
 		};
 		window.setTimeout(() => area.focus(), 0);
+		return () => area.value;
+	}
+
+	/**
+	 * Ends the recall stage and shows the options. The clock restarts: the
+	 * time spent recalling is not time spent choosing, and counting it would
+	 * make a recall-first answer look slow next to plain choice answers, so
+	 * it could never rate Easy.
+	 */
+	private async showOptions(recalled: string): Promise<void> {
+		this.recallStage = { index: this.index, text: recalled, shown: true };
+		this.questionStart = Date.now();
+		await this.render();
 	}
 
 	/** Draws the answer controls. Returns the option inputs in display order, for the 1–9 keys. */
@@ -928,7 +946,7 @@ export class RecallLabView extends ItemView {
 		const ms = Date.now() - this.questionStart;
 		const extra: Pick<Attempt, "confidence" | "recalled"> = {};
 		if (confidence) extra.confidence = confidence;
-		if (state.recalled) extra.recalled = state.recalled;
+		if (state.recalled !== undefined) extra.recalled = state.recalled;
 
 		const local = gaveUp
 			? { score: 0, verdict: "incorrect" as const, feedback: "You skipped this one.", missing: [q.topic] }
