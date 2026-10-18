@@ -23,7 +23,7 @@ import { findLeeches } from "./leeches";
 import { needingSteps, needsGuidance } from "./guided";
 import { SECOND_TRY_CAP, combineTries } from "./tasks";
 import { blurtExam, missedHeading } from "./blurt";
-import { checkFlag, hintsNeedShortening } from "./labs";
+import { checkFlag, hintsNeedShortening, normaliseFlag } from "./labs";
 import { INSTALL_HINT } from "./claude";
 
 // Rough per-quiz figures for the bulk-generation dialog. Illustrative only:
@@ -81,6 +81,10 @@ export class RecallLabView extends ItemView {
 	/** Fill-in-the-blank questions made from each course note's ==highlights==. */
 	private highlightBanks: Bank[] = [];
 	private openLab: Lab | null = null;
+	/** The page last drawn (see pageKey), to tell a redraw from a move. */
+	private lastPage = "";
+	/** Wrong flags already submitted, per lab: trying one again is not another miss. */
+	private triedFlags = new Map<string, Set<string>>();
 
 	/** The paper being sat: a note's bank, a course's banks merged, or a review. */
 	private bank: Bank | null = null;
@@ -258,8 +262,15 @@ export class RecallLabView extends ItemView {
 	// ================================================================ layout
 
 	private async render(): Promise<void> {
+		// A redraw of the page you are on keeps your place on it (revealing a
+		// hint, giving up, solving); only moving to another page starts at
+		// the top.
+		const page = this.pageKey();
+		const keep = page === this.lastPage ? this.scrollPlace() : null;
+		this.lastPage = page;
 		try {
 			await this.renderInner();
+			if (keep) this.restoreScroll(keep);
 		} catch (e) {
 			// A thrown render used to leave an empty pane that looked like dead
 			// buttons. Show the fault instead, and write it down.
@@ -277,6 +288,25 @@ export class RecallLabView extends ItemView {
 			new ButtonComponent(actions).setButtonText("Run diagnostics")
 				.onClick(() => void this.plugin.diagnose());
 		}
+	}
+
+	/** Which page is on screen: the same key means a redraw, not a move. */
+	private pageKey(): string {
+		const page = [this.screen, this.selectedFolder, this.openLab?.id, this.clinicKey, this.blurt?.path, this.teach?.path];
+		// Each question of an exam is a page of its own.
+		if (this.screen === "exam") page.push(String(this.index));
+		return page.map((x) => x ?? "").join("|");
+	}
+
+	/** How far the view is scrolled; the pane or its main column, whichever scrolls. */
+	private scrollPlace(): { pane: number; main: number } {
+		return { pane: this.contentEl.scrollTop, main: this.contentEl.querySelector(".rl-main")?.scrollTop ?? 0 };
+	}
+
+	private restoreScroll(place: { pane: number; main: number }): void {
+		this.contentEl.scrollTop = place.pane;
+		const main = this.contentEl.querySelector(".rl-main");
+		if (main) main.scrollTop = place.main;
 	}
 
 	private async renderInner(): Promise<void> {
@@ -2321,12 +2351,22 @@ export class RecallLabView extends ItemView {
 				this.plugin.log.info("lab solved", { lab: lab.id, attempts: prog.attempts, hints: prog.hintsUsed });
 				await this.render();
 			} else {
-				prog.attempts += 1;
-				await this.plugin.store.saveLabProgress(prog);
-				this.plugin.log.info("wrong flag", { lab: lab.id, attempts: prog.attempts, submitted: value.slice(0, 60) });
 				verdict.empty();
 				verdict.removeClass("rl-muted");
 				verdict.addClass("rl-flag-wrong");
+				// Pressing Enter twice, or trying the same guess again, costs
+				// nothing more: only a new wrong flag counts.
+				const tried = this.triedFlags.get(lab.id) ?? new Set<string>();
+				this.triedFlags.set(lab.id, tried);
+				const flag = normaliseFlag(value);
+				if (tried.has(flag)) {
+					verdict.setText(`You already tried that one. ${prog.attempts} wrong so far.`);
+					return;
+				}
+				tried.add(flag);
+				prog.attempts += 1;
+				await this.plugin.store.saveLabProgress(prog);
+				this.plugin.log.info("wrong flag", { lab: lab.id, attempts: prog.attempts, submitted: value.slice(0, 60) });
 				verdict.setText(`Not the flag. ${prog.attempts} wrong so far.`);
 				input.addClass("rl-shake");
 				window.setTimeout(() => input.removeClass("rl-shake"), 500);
@@ -2350,20 +2390,28 @@ export class RecallLabView extends ItemView {
 				const fix = old.createEl("a", { cls: "rl-link", text: "Shorten them (uses Claude)" });
 				fix.onclick = (e) => { e.preventDefault(); void this.plugin.offerHintRewrite(lab); };
 			}
-			for (let i = 0; i < Math.min(prog.hintsUsed, lab.hints.length); i++) {
-				const h = hintPanel.createDiv({ cls: "rl-hint-shown" });
+			const shown = hintPanel.createDiv({ cls: "rl-hints-shown" });
+			const showHint = (i: number) => {
+				const h = shown.createDiv({ cls: "rl-hint-shown" });
 				h.createSpan({ cls: "rl-chip", text: `Hint ${i + 1}` });
 				void this.md(lab.hints[i], h.createDiv());
-			}
-            if (prog.hintsUsed < lab.hints.length && !prog.solvedAt) {
-				new ButtonComponent(hintPanel.createDiv({ cls: "rl-actions" }))
-					.setButtonText(`Reveal hint ${prog.hintsUsed + 1} of ${lab.hints.length}`)
-					.onClick(async () => {
-						prog.hintsUsed += 1;
-						await this.plugin.store.saveLabProgress(prog);
-						this.plugin.log.info("hint revealed", { lab: lab.id, hint: prog.hintsUsed });
-						await this.render();
-					});
+			};
+			for (let i = 0; i < Math.min(prog.hintsUsed, lab.hints.length); i++) showHint(i);
+			if (prog.hintsUsed < lab.hints.length && !prog.solvedAt) {
+				const row = hintPanel.createDiv({ cls: "rl-actions" });
+				const label = () => `Reveal hint ${prog.hintsUsed + 1} of ${lab.hints.length}`;
+				const reveal = new ButtonComponent(row).setButtonText(label());
+				reveal.onClick(async () => {
+					if (prog.hintsUsed >= lab.hints.length) return;
+					reveal.setDisabled(true);
+					prog.hintsUsed += 1;
+					await this.plugin.store.saveLabProgress(prog);
+					this.plugin.log.info("hint revealed", { lab: lab.id, hint: prog.hintsUsed });
+					// Shown in place: redrawing the page jumped you back to its top.
+					showHint(prog.hintsUsed - 1);
+					if (prog.hintsUsed < lab.hints.length) reveal.setButtonText(label()).setDisabled(false);
+					else row.remove();
+				});
 			}
 		}
 
