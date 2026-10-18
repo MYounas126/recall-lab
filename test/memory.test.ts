@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import { strict as assert } from "node:assert";
 import { Rating } from "ts-fsrs";
-import { Memory, dayOffset, describeWhen, keyOf, keysOf, planReview, ratingFor } from "../src/memory";
+import { Memory, Pace, dayOffset, describeWhen, keyOf, keysOf, planReview, ratingFor } from "../src/memory";
 import { AnswerIndex } from "../src/history";
 import { Store } from "../src/store";
 import { qkey, type Bank } from "../src/types";
@@ -65,6 +65,45 @@ test("days are counted on the calendar, also across a daylight-saving change", (
 		if (tz === undefined) delete process.env.TZ;
 		else process.env.TZ = tz;
 	}
+});
+
+test("confidence tunes the rating", () => {
+	const right = (confidence: "guess" | "unsure" | "sure") => attempt("a", "q1", 100, ago(0), { confidence });
+	assert.equal(ratingFor(right("guess")), Rating.Again, "a lucky guess is not knowledge yet");
+	assert.equal(ratingFor(right("unsure")), Rating.Good);
+	assert.equal(ratingFor(right("sure")), Rating.Good, "sure but slow stays Good");
+	assert.equal(ratingFor(right("sure"), true), Rating.Easy, "sure and quick is Easy");
+	assert.equal(ratingFor(attempt("a", "q1", 0, ago(0), { confidence: "sure" }), true), Rating.Again);
+});
+
+test("a partly-right guess is a miss too, not a pass", () => {
+	const partial = (confidence: "guess" | "sure") => attempt("a", "q1", 70, ago(0), { verdict: "partial", confidence });
+	assert.equal(ratingFor(partial("guess")), Rating.Again, "no better than a fully-right guess");
+	assert.equal(ratingFor(partial("sure"), true), Rating.Hard, "sure does not lift a partial answer");
+});
+
+test("quick means at or under your usual time, once there is a usual time", () => {
+	const pace = new Pace();
+	const fast = attempt("a", "x", 100, ago(0), { ms: 1000 });
+	for (let i = 0; i < 4; i++) pace.add(attempt("a", `q${i}`, 100, ago(0), { ms: 5000 }));
+	assert.equal(pace.quick(fast), false, "four answers are not a baseline yet");
+	pace.add(attempt("a", "q4", 100, ago(0), { ms: 5000 }));
+	assert.equal(pace.quick(fast), true);
+	assert.equal(pace.quick(attempt("a", "x", 100, ago(0), { ms: 9000 })), false);
+	assert.equal(pace.quick(attempt("a", "x", 100, ago(0), { ms: 1000, type: "short" })), false, "each type has its own pace");
+	pace.add(attempt("a", "q5", 0, ago(0), { ms: 1 }));
+	assert.equal(pace.quick(attempt("a", "x", 100, ago(0), { ms: 5000 })), true, "misses do not set the pace");
+});
+
+test("right, sure and quick is spaced out further than plain right", () => {
+	const warmup = [0, 1, 2, 3, 4].map((i) => attempt("w", `q${i}`, 100, ago(1), { ms: 5000 }));
+	const m = memoryOf(
+		...warmup,
+		attempt("a", "easy", 100, ago(0), { ms: 1000, confidence: "sure" }),
+		attempt("a", "good", 100, ago(0), { ms: 1000, confidence: "unsure" }),
+	);
+	const due = (id: string) => m.card(qkey("a", id))!.due.getTime();
+	assert.ok(due("easy") > due("good"));
 });
 
 test("a correct answer is spaced out further than a missed one", () => {

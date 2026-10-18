@@ -1,4 +1,25 @@
-import { Attempt, qkey } from "./types";
+import { Attempt, Confidence, qkey } from "./types";
+
+export interface Calibration {
+	level: Confidence;
+	answers: number;
+	right: number;
+}
+
+/**
+ * How often you were right at each level of confidence you claimed: the
+ * check on whether "sure" really means sure. Levels never used are left out.
+ */
+export function calibration(attempts: Attempt[]): Calibration[] {
+	const levels: Confidence[] = ["sure", "unsure", "guess"];
+	return levels
+		.map((level) => {
+			// A failed marking was never right or wrong, so it says nothing either way.
+			const mine = attempts.filter((a) => a.confidence === level && a.gradedBy !== "error");
+			return { level, answers: mine.length, right: mine.filter((a) => a.verdict === "correct").length };
+		})
+		.filter((c) => c.answers > 0);
+}
 
 /**
  * Every answer, indexed by question once so a lookup does not rescan the

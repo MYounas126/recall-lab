@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import { strict as assert } from "node:assert";
-import { AnswerIndex } from "../src/history";
+import { AnswerIndex, calibration } from "../src/history";
 import { Store } from "../src/store";
 import { scoreAxes } from "../src/radar";
 import type { Bank, Course } from "../src/types";
@@ -52,6 +52,20 @@ test("a course exam keeps every question's own bank", () => {
 	const picked = Store.pickExam(Store.itemsOf([tiered("c"), tiered("d")]), new AnswerIndex([]), 6);
 	assert.equal(picked.length, 6);
 	assert.deepEqual(picked.map((it) => it.bankId).sort(), ["c", "c", "c", "d", "d", "d"]);
+});
+
+test("calibration counts how often each level of confidence was right", () => {
+	const levels = calibration([
+		attempt("a", "q1", 100, undefined, { confidence: "sure" }),
+		attempt("a", "q2", 0, undefined, { confidence: "sure" }),
+		attempt("a", "q3", 100, undefined, { confidence: "guess" }),
+		attempt("a", "q4", 100), // from before confidence was asked
+		attempt("a", "q5", 0, undefined, { confidence: "sure", gradedBy: "error" }), // Claude unreachable
+	]);
+	assert.deepEqual(levels, [
+		{ level: "sure", answers: 2, right: 1 },
+		{ level: "guess", answers: 1, right: 1 },
+	]);
 });
 
 test("the full exam puts easy first and keeps everything", () => {

@@ -66,6 +66,13 @@ further out. Answers are saved as you go, so you can stop at any point. Reviews
 stay offline apart from marking written answers: feedback from Claude is one
 button away rather than automatic.
 
+**How sure are you?** Every question has three submit buttons: *Guessing*,
+*Submit* and *Sure*. A right answer you were guessing at comes back as if you
+had missed it; right, sure and faster than your usual pace is spaced out
+further. Plain *Submit* claims neither. Mistakes you were sure about get their
+own list on the results screen (they stick unusually well once corrected), and
+History shows how often each level of confidence turned out right.
+
 **Settings → Daily review** sets the target recall (90% by default; higher
 means more frequent reviews) and how many new questions a day may bring in
 (20). The schedule itself is never stored: it is rebuilt from `attempts.json`

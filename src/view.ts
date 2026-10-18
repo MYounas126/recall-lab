@@ -4,8 +4,8 @@ import { Store } from "./store";
 import { gradeLocally } from "./grader";
 import { shuffled } from "./util";
 import { renderRadar, scoreAxes, scoreCourses, weakestTested, untested, AxisScore } from "./radar";
-import { Attempt, Bank, Course, ExamItem, Lab, LabProgress, Question, SessionSummary, Tier, labScore, letterGrade } from "./types";
-import { AnswerIndex } from "./history";
+import { Attempt, Bank, Confidence, Course, ExamItem, Lab, LabProgress, Question, SessionSummary, Tier, labScore, letterGrade } from "./types";
+import { AnswerIndex, calibration } from "./history";
 import { Memory, ReviewPlan, counts, describeWhen, endOfDay, keysOf, planReview } from "./memory";
 import { checkFlag } from "./labs";
 import { INSTALL_HINT } from "./claude";
@@ -653,13 +653,22 @@ export class RecallLabView extends ItemView {
 		const state: AnswerState = { chosen: [], text: "" };
 		this.renderAnswerWidget(q, card.createDiv({ cls: "rl-answer" }), state);
 
+		// Saying how sure you are tunes the schedule: a lucky guess comes back
+		// soon, a quick sure answer goes further out. Submit claims neither.
 		const actions = card.createDiv({ cls: "rl-actions" });
+		new ButtonComponent(actions).setButtonText("Guessing")
+			.setTooltip("Even if it is right, a guess comes back soon")
+			.onClick(() => void this.submit(item, state, wrap, false, "guess"));
 		const submit = new ButtonComponent(actions).setButtonText("Submit").setCta()
-			.onClick(() => void this.submit(item, state, wrap));
+			.onClick(() => void this.submit(item, state, wrap, false, "unsure"));
+		new ButtonComponent(actions).setButtonText("Sure")
+			.setTooltip("Right, sure and quick: it is spaced out further")
+			.onClick(() => void this.submit(item, state, wrap, false, "sure"));
 		if (q.type === "short" || q.type === "command" || q.type === "image") {
 			new ButtonComponent(actions).setButtonText("I don't know")
 				.onClick(() => { state.text = ""; void this.submit(item, state, wrap, true); });
 		}
+		actions.createSpan({ cls: "rl-hint", text: "Guessing or sure? Saying so tunes when this comes back." });
 		submit.buttonEl.focus();
 	}
 
@@ -724,7 +733,9 @@ export class RecallLabView extends ItemView {
 		window.setTimeout(() => area.focus(), 0);
 	}
 
-	private async submit(item: ExamItem, state: AnswerState, wrap: HTMLElement, gaveUp = false): Promise<void> {
+	private async submit(
+		item: ExamItem, state: AnswerState, wrap: HTMLElement, gaveUp = false, confidence?: Confidence
+	): Promise<void> {
 		const q = item.q;
 		if (this.revealed) return;
 		if ((q.type === "mcq" || q.type === "multi") && !state.chosen.length) { new Notice("Pick an answer first."); return; }
@@ -737,7 +748,7 @@ export class RecallLabView extends ItemView {
 
 		const live: LiveAnswer = { q, bankId: item.bankId, response: state.text || describeChoice(q, state.chosen), image: state.image, ms };
 		if (local) {
-			live.attempt = this.attemptFrom(item, live.response, local.score, local.verdict, local.feedback, local.missing, "local", ms);
+			live.attempt = this.attemptFrom(item, live.response, local.score, local.verdict, local.feedback, local.missing, "local", ms, confidence);
 			this.keep(live.attempt);
 			this.answers.push(live);
 			this.showFeedback(q, live, wrap);
@@ -752,11 +763,11 @@ export class RecallLabView extends ItemView {
 		if ("error" in marked) {
 			this.plugin.log.error("marking failed", { question: q.id, error: marked.error });
 			live.attempt = this.attemptFrom(item, live.response, 0, "incorrect",
-				`Could not reach Claude to mark this: ${marked.error}`, [q.topic], "error", ms);
+				`Could not reach Claude to mark this: ${marked.error}`, [q.topic], "error", ms, confidence);
 		} else {
 			this.plugin.log.info("answer marked", { question: q.id, score: marked.score });
 			live.attempt = this.attemptFrom(item, live.response, marked.score, marked.verdict,
-				[marked.feedback, marked.improve].filter(Boolean).join(" "), marked.missing, "ai", ms);
+				[marked.feedback, marked.improve].filter(Boolean).join(" "), marked.missing, "ai", ms, confidence);
 		}
 		this.keep(live.attempt);
 		panel.remove();
@@ -778,13 +789,14 @@ export class RecallLabView extends ItemView {
 	 */
 	private attemptFrom(
 		item: ExamItem, response: string, score: number, verdict: Attempt["verdict"],
-		feedback: string, missing: string[], gradedBy: Attempt["gradedBy"], ms: number
+		feedback: string, missing: string[], gradedBy: Attempt["gradedBy"], ms: number, confidence?: Confidence
 	): Attempt {
 		const q = item.q;
 		return {
 			ts: new Date().toISOString(), sessionId: this.sessionId, bankId: item.bankId,
 			questionId: q.id, tier: q.tier, type: q.type, topic: q.topic,
 			response, score, verdict, feedback, missing, gradedBy, ms,
+			...(confidence ? { confidence } : {}),
 		};
 	}
 
@@ -955,17 +967,24 @@ export class RecallLabView extends ItemView {
 
 		this.renderCoaching(main, session);
 
-		const wrong = graded.filter((a) => a.verdict !== "correct");
+		// Mistakes made with confidence get their own list: once corrected they
+		// are remembered unusually well (the hypercorrection effect).
+		const confident = graded.filter((a) => counts(a) && a.confidence === "sure" && a.verdict !== "correct");
+		if (confident.length) {
+			const list = main.createDiv({ cls: "rl-panel rl-panel-confident" });
+			list.createEl("h3", { text: "You were sure, but…" });
+			list.createDiv({
+				cls: "rl-muted",
+				text: "Mistakes made with confidence stick unusually well once corrected. Read these explanations twice.",
+			});
+			for (const a of confident) this.renderReviewRow(list, a, true);
+		}
+
+		const wrong = graded.filter((a) => a.verdict !== "correct" && !confident.includes(a));
 		if (wrong.length) {
 			const list = main.createDiv({ cls: "rl-panel" });
 			list.createEl("h3", { text: "Go back over these" });
-			for (const a of wrong) {
-				const q = this.examItems.find((x) => x.bankId === a.bankId && x.q.id === a.questionId)?.q;
-				const row = list.createDiv({ cls: "rl-review-row" });
-				row.createSpan({ cls: "rl-chip", text: a.topic });
-				void this.md(q ? q.prompt.split("\n")[0] : a.questionId, row.createDiv({ cls: "rl-review-q" }));
-				if (a.feedback) void this.md(a.feedback, row.createDiv({ cls: "rl-review-fb" }));
-			}
+			for (const a of wrong) this.renderReviewRow(list, a, false);
 		}
 
 		const actions = main.createDiv({ cls: "rl-actions" });
@@ -973,6 +992,16 @@ export class RecallLabView extends ItemView {
 			.onClick(() => { this.screen = "home"; void this.render(); });
 		new ButtonComponent(actions).setButtonText("History")
 			.onClick(() => { this.screen = "history"; void this.render(); });
+	}
+
+	/** One answer to go back over: its topic, the question, what was wrong, and optionally why. */
+	private renderReviewRow(list: HTMLElement, a: Attempt, withExplanation: boolean): void {
+		const q = this.examItems.find((x) => x.bankId === a.bankId && x.q.id === a.questionId)?.q;
+		const row = list.createDiv({ cls: "rl-review-row" });
+		row.createSpan({ cls: "rl-chip", text: a.topic });
+		void this.md(q ? q.prompt.split("\n")[0] : a.questionId, row.createDiv({ cls: "rl-review-q" }));
+		if (a.feedback) void this.md(a.feedback, row.createDiv({ cls: "rl-review-fb" }));
+		if (withExplanation && q?.explain) void this.md(q.explain, row.createDiv({ cls: "rl-review-fb rl-explain" }));
 	}
 
 	/** Claude's feedback, shown here as soon as it lands. */
@@ -1174,6 +1203,8 @@ export class RecallLabView extends ItemView {
 		stat("Mean score", `${mean}%`);
 		stat("Notes completed", String(Object.keys(progress.completed ?? {}).length));
 
+		this.renderCalibration(main, progress.attempts);
+
 		// Weakest topics across everything.
 		const byTopic = new Map<string, number[]>();
 		for (const a of marked) { const l = byTopic.get(a.topic) ?? []; l.push(a.score); byTopic.set(a.topic, l); }
@@ -1216,6 +1247,34 @@ export class RecallLabView extends ItemView {
 				const chips = row.createDiv({ cls: "rl-session-chips" });
 				for (const t of s.weakTopics.slice(0, 6)) chips.createSpan({ cls: "rl-chip", text: t });
 			}
+		}
+	}
+
+	/** Whether "sure" really means sure: how often each level of confidence was right. */
+	private renderCalibration(main: HTMLElement, attempts: Attempt[]): void {
+		const levels = calibration(attempts);
+		if (!levels.length) return;
+		const label: Record<Confidence, string> = {
+			sure: "When you said Sure",
+			unsure: "When you just submitted",
+			guess: "When you were guessing",
+		};
+		const panel = main.createDiv({ cls: "rl-panel" });
+		panel.createEl("h3", { text: "How well you know what you know" });
+		for (const c of levels) {
+			const pct = Math.round((c.right / c.answers) * 100);
+			const row = panel.createDiv({ cls: "rl-bar-row" });
+			row.createSpan({ cls: "rl-bar-label", text: label[c.level] });
+			const fill = row.createDiv({ cls: "rl-progress" }).createDiv({ cls: "rl-progress-fill" });
+			fill.setCssProps({ "--rl-fill": `${pct}%` });
+			row.createSpan({ cls: "rl-bar-value", text: `${pct}% right · ${c.answers}` });
+		}
+		const sure = levels.find((c) => c.level === "sure");
+		if (sure && sure.answers >= 10 && sure.right / sure.answers < 0.8) {
+			panel.createDiv({
+				cls: "rl-radar-note",
+				text: "When you say Sure, you are wrong more than one time in five. Those are worth slowing down for.",
+			});
 		}
 	}
 
