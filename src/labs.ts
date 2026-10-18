@@ -21,6 +21,40 @@ export function checkFlag(lab: Lab, submitted: string): boolean {
 	return hashFlag(submitted) === lab.flagHash.toLowerCase();
 }
 
+/** The most words a lab hint may have: a nudge, not a step. */
+export const HINT_MAX_WORDS = 12;
+
+/**
+ * Whether a hint reads like a CTF hint: a few words pointing at where to
+ * look or which idea matters ("Mind the register width."), not a step to
+ * follow or a value to copy. This is a backstop, not a judge of meaning:
+ * the prompt asks for nudges, and this drops what is plainly not one — too
+ * long, a value of four or more hex digits or six decimal ones, or a flag.
+ */
+export function isNudge(hint: string): boolean {
+	const words = String(hint).trim().split(/\s+/).filter(Boolean);
+	if (!words.length || words.length > HINT_MAX_WORDS) return false;
+	return !/0x[0-9a-f]{4,}|\b\d{6,}\b|\b(?=[0-9a-f]*\d)[0-9a-f]{8,}\b|flag\{/i.test(hint);
+}
+
+/** Whether a hint gives this lab's flag away: some word in it is the flag. */
+export function leaksFlag(lab: Lab, hint: string): boolean {
+	return String(hint).split(/\s+/).some((w) => {
+		const word = w.replace(/^[^\w{]+|[^\w}]+$/g, "");
+		return word.length > 0 && checkFlag(lab, word);
+	});
+}
+
+/** The hints that are nudges, at most `max` of them. */
+export function nudges(hints: unknown, max = 3): string[] {
+	return (Array.isArray(hints) ? hints : []).map((h) => String(h).trim()).filter(isNudge).slice(0, max);
+}
+
+/** Whether a lab's hints read like walkthrough steps, and are worth shortening. */
+export function hintsNeedShortening(lab: Lab): boolean {
+	return Array.isArray(lab.hints) && lab.hints.some((h) => !isNudge(h));
+}
+
 /** Rejects a lab that would be unusable or unsafe to hand over. */
 export function validateLab(lab: Lab): string | null {
 	if (!lab?.id) return "the lab has no id";

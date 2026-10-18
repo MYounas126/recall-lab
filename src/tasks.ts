@@ -5,7 +5,7 @@ import { Attempt, Bank, BlurtResult, Course, Diagnosis, Lab, Question, QuestionT
 import type { Leech } from "./leeches";
 import { Section, blurtPrompt, headingsOf, parseBlurt, sectionsOf } from "./blurt";
 import { parseStudent, parseTeachScore, studentPrompt, teachScorePrompt } from "./teach";
-import { hashFlag, validateLab, detectToolchain, describeToolchain } from "./labs";
+import { hashFlag, leaksFlag, nudges, validateLab, detectToolchain, describeToolchain } from "./labs";
 import type { Strictness } from "./settings";
 import { hashText } from "./util";
 import { answeredTo, plain } from "./answers";
@@ -196,7 +196,9 @@ export class Tasks {
 				text.split(r.flag).join(`\`${lab.flagFormat}\``).split(bareFlag(r.flag)).join("…");
 			lab.brief = redact(lab.brief);
 			lab.solution = redact(lab.solution);
-			lab.hints = lab.hints.map(redact);
+			// Hints are nudges of a few words; one that walks through a step or
+			// quotes a value is dropped rather than handed over.
+			lab.hints = nudges(lab.hints.map(redact));
 
 			const readable = [lab.brief, lab.solution, lab.setup, ...lab.hints, lab.title].join("\n");
 			if (readable.includes(r.flag) || readable.includes(bareFlag(r.flag))) {
@@ -308,6 +310,53 @@ export class Tasks {
 		if (!res.ok) return { error: res.error };
 		const diagnosis = parseDiagnosis(leech.item.q, res.data, new Date());
 		return typeof diagnosis === "string" ? { error: `Claude's diagnosis was not usable: ${diagnosis}.` } : diagnosis;
+	}
+
+	// ------------------------------------------------------------- lab hints
+
+	/**
+	 * Rewrites labs' hints as CTF nudges and saves them into each lab's file,
+	 * a few labs per request so a large vault stays within one prompt's reach.
+	 * A lab is rewritten only with a full set of nudges that do not give its
+	 * flag away; otherwise it keeps its old hints. Returns, per rewritten lab,
+	 * how many hints it now has.
+	 */
+	async rewriteHints(labs: Lab[]): Promise<Record<string, number> | { error: string }> {
+		const done: Record<string, number> = {};
+		let failure = "";
+		for (let i = 0; i < labs.length; i += HINT_BATCH) {
+			const batch = labs.slice(i, i + HINT_BATCH);
+			const res = await this.cli.askJson<{ hints?: Record<string, unknown> }>(hintsPrompt(batch), 240000);
+			if (!res.ok) {
+				failure = res.error;
+				continue;
+			}
+			for (const lab of batch) {
+				const hints = nudges(res.data?.hints?.[lab.id]).filter((h) => !leaksFlag(lab, h));
+				// A partial set would leave hints already revealed, and paid
+				// for, with nothing to show.
+				if (hints.length < Math.min(3, lab.hints.length)) continue;
+				const path = normalizePath(`${this.labsFolder()}/${lab.id}.json`);
+				const file = this.app.vault.getAbstractFileByPath(path);
+				if (!(file instanceof TFile)) continue;
+				// Read again just before the write, so nothing else in the file is
+				// lost, and skip a lab rebuilt under the same id meanwhile.
+				let fresh: Lab;
+				try {
+					fresh = JSON.parse(await this.app.vault.read(file)) as Lab;
+				} catch {
+					continue;
+				}
+				if (fresh.flagHash !== lab.flagHash) continue;
+				fresh.hints = hints;
+				await this.writeFile(path, JSON.stringify(fresh, null, 2) + "\n");
+				done[lab.id] = hints.length;
+			}
+		}
+		if (!Object.keys(done).length) {
+			return { error: failure || "None of the hints Claude wrote were short enough to use." };
+		}
+		return done;
 	}
 
 	// --------------------------------------------------------------- variants
@@ -595,7 +644,7 @@ export function labPrompt(
 		"  way to check their answer, compare against a hash or an encoded form, never against the flag.",
 		"- `setup` is the shell commands to get going (compile, run). Keep it to a few lines. It is shown to",
 		"  the learner to read before they run it, so keep it obvious and harmless.",
-		"- 2 to 4 `hints`, each giving away a little more, the last one nearly telling them.",
+		...HINT_RULES,
 		"- `solution` explains how it was meant to be solved, for after they finish.",
 		"",
 		"SHAPE",
@@ -604,7 +653,8 @@ export function labPrompt(
 		'  "brief":"<markdown: the task, and what done looks like>",',
 		'  "setup":"gcc -g -O0 -o target src/target.c\n./target",',
 		'  "files":[{"path":"src/target.c","content":"<full file>","executable":false}],',
-		'  "hints":["...","..."],"flag":"flag{...}","flagFormat":"flag{...}",',
+		'  "hints":["Mind the register width.","What does AH cover?","Not every write zero-extends."],',
+		'  "flag":"flag{...}","flagFormat":"flag{...}",',
 		'  "solution":"<markdown walkthrough>"}]}',
 		"",
 		`Use axis ids from: ${course.axes.map((a) => a.id).join(", ")}`,
@@ -614,6 +664,46 @@ export function labPrompt(
 		"---",
 		content,
 		"---",
+	].join("\n");
+}
+
+/** Labs per hint-rewrite request: each carries its whole source and solution. */
+const HINT_BATCH = 4;
+
+/** How lab hints are written: CTF nudges, the way HackTheBox words them. */
+const HINT_RULES = [
+	"- Exactly 3 `hints`, written the way HackTheBox or a CTF writes them: each AT MOST 8 words, a nudge",
+	"  toward where to look or which idea matters, e.g. \"Mind the register width.\", \"What does AH",
+	"  cover?\", \"Not every write zero-extends.\" Each may point a little closer than the last, but even",
+	"  the third leaves all the work to the learner.",
+	"- A hint is never a step to follow, a command to run, a calculation, a value, a key, an offset or",
+	"  the flag. No numbers beyond a few digits.",
+];
+
+/** The prompt that rewrites labs' walkthrough hints as nudges. Pure, so it can be tested. */
+export function hintsPrompt(labs: Lab[]): string {
+	return [
+		"Rewrite the hints of each hands-on lab below. Reply with ONLY a JSON object, no prose and no fence.",
+		"",
+		"Each lab is a CTF-style challenge: one source file, and a flag the learner works out by reading it.",
+		"Its current hints walk through the solution; replace them with real CTF hints.",
+		"",
+		"RULES",
+		...HINT_RULES,
+		"- Use the lab's id exactly as given.",
+		"",
+		'SHAPE: {"hints":{"<lab id>":["...","...","..."]}}',
+		"",
+		"LABS:",
+		JSON.stringify(
+			labs.map((l) => ({
+				id: l.id, title: l.title, tier: l.tier, brief: l.brief,
+				files: l.files.map((f) => ({ path: f.path, content: f.content })),
+				solution: l.solution,
+			})),
+			null,
+			1
+		),
 	].join("\n");
 }
 
