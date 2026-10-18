@@ -105,8 +105,8 @@ export interface SessionSummary {
 	ts: string;
 	bankId: string;
 	bankTitle?: string;
-	/** "mixed" for a full exam that ramps through all three levels. */
-	tier: Tier | "mixed";
+	/** "mixed" for an exam that ramps through all three levels; "review" for a spaced review. */
+	tier: Tier | "mixed" | "review";
 	asked: number;
 	meanScore: number;
 	grade: string;

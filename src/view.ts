@@ -6,6 +6,7 @@ import { shuffled } from "./util";
 import { renderRadar, scoreAxes, scoreCourses, weakestTested, untested, AxisScore } from "./radar";
 import { Attempt, Bank, Course, ExamItem, Lab, LabProgress, Question, SessionSummary, Tier, labScore, letterGrade } from "./types";
 import { AnswerIndex } from "./history";
+import { Memory, ReviewPlan, describeWhen, keysOf, planReview } from "./memory";
 import { checkFlag } from "./labs";
 import { INSTALL_HINT } from "./claude";
 
@@ -49,9 +50,13 @@ export class RecallLabView extends ItemView {
 	private allLabs: Lab[] = [];
 	private openLab: Lab | null = null;
 
-	/** The paper being sat: a note's bank, or a course's banks merged. */
+	/** The paper being sat: a note's bank, a course's banks merged, or a review. */
 	private bank: Bank | null = null;
 	private examItems: ExamItem[] = [];
+	/** A review is spaced practice: it stays offline unless you ask for feedback. */
+	private sessionKind: "exam" | "review" = "exam";
+	/** Sessions whose on-demand feedback has been asked for and not yet landed. */
+	private coachingInFlight = new Set<string>();
 	private index = 0;
 	private answers: LiveAnswer[] = [];
 	private sessionId = "";
@@ -215,6 +220,8 @@ export class RecallLabView extends ItemView {
 			return;
 		}
 
+		await this.renderReviewPanel(main, this.banks);
+
 		// The central radar: one spoke per course, across the whole vault.
 		const index = new AnswerIndex(progress.attempts);
 		const scores = scoreCourses(this.courses, (c) => Store.banksForCourse(c, this.banks), index);
@@ -251,6 +258,78 @@ export class RecallLabView extends ItemView {
 				.setCta()
 				.onClick(() => { this.selectedFolder = course.folder; this.screen = "folder"; void this.render(); });
 		}
+	}
+
+	/** Today's review over these banks, with every question's memory state. */
+	private async planFor(banks: Bank[]): Promise<{ plan: ReviewPlan; memory: Memory; keys: Set<string> }> {
+		const progress = await this.plugin.store.readProgress();
+		const memory = new Memory(progress.attempts, this.plugin.settings.targetRecall / 100);
+		const noteOf = new Map(this.banks.map((b) => [b.id, b.note]));
+		const items = Store.itemsOf(banks);
+		const plan = planReview({
+			items,
+			memory,
+			now: new Date(),
+			newPerDay: this.plugin.settings.newPerDay,
+			completed: progress.completed ?? {},
+			noteOf: (id) => noteOf.get(id),
+		});
+		return { plan, memory, keys: keysOf(items) };
+	}
+
+	/** What is due today, and the button that starts the review. */
+	private async renderReviewPanel(main: HTMLElement, banks: Bank[], course?: Course): Promise<void> {
+		const { plan, memory, keys } = await this.planFor(banks);
+		const now = new Date();
+		const panel = main.createDiv({ cls: "rl-panel rl-review-panel" });
+		const head = panel.createDiv({ cls: "rl-panel-head" });
+		head.createEl("h3", { text: course ? "Review this course" : "Today's review" });
+
+		const total = plan.due.length + plan.fresh.length;
+		if (total) {
+			head.createSpan({ cls: "rl-grade-pill", text: `${plan.due.length} due · ${plan.fresh.length} new` });
+			panel.createDiv({
+				cls: "rl-muted",
+				text: "Questions you are closest to forgetting come first, then new ones. Stop whenever you like: every answer is saved as you go.",
+			});
+			new ButtonComponent(panel.createDiv({ cls: "rl-actions" }))
+				.setButtonText(`Start review (${total})`)
+				.setCta()
+				.onClick(() => void this.startReview(course));
+		} else {
+			const next = memory.nextDue(now, keys);
+			panel.createDiv({
+				cls: "rl-muted",
+				text: next
+					? `All caught up. The next question is due ${describeWhen(next, now)}.`
+					: "Nothing to review yet. Take an exam or mark a note complete, and its questions join your reviews.",
+			});
+		}
+		const ahead = memory.forecast(now, 8, keys);
+		const week = ahead.slice(1).reduce((a, b) => a + b, 0);
+		if (week) {
+			panel.createDiv({ cls: "rl-muted", text: `Coming up: ${ahead[1]} tomorrow, ${week} over the next 7 days.` });
+		}
+	}
+
+	/** Starts today's review: across every course, or one course. */
+	async startReview(course?: Course): Promise<void> {
+		await this.refresh();
+		const banks = course ? Store.banksForCourse(course, this.banks) : this.banks;
+		const { plan, memory, keys } = await this.planFor(banks);
+		const items = [...plan.due, ...plan.fresh];
+		if (!items.length) {
+			const now = new Date();
+			const next = memory.nextDue(now, keys);
+			new Notice(next ? `Nothing to review. The next question is due ${describeWhen(next, now)}.` : "Nothing to review yet.");
+			return;
+		}
+		const paper: Bank = {
+			id: course ? `review:${course.id}` : "review",
+			title: course ? `Review · ${course.title}` : "Daily review",
+			questions: [],
+		};
+		await this.launch(paper, items, "review");
 	}
 
 	private renderLegend(panel: HTMLElement, scores: AxisScore[], onClick?: (id: string) => void): void {
@@ -346,6 +425,8 @@ export class RecallLabView extends ItemView {
 				text: `Not tested yet: ${notYet.map((a) => a.axis.label).join(", ")} — these read zero because they have not come up, not because you got them wrong.`,
 			});
 		}
+
+		if (courseBanks.length) await this.renderReviewPanel(main, courseBanks, course);
 
 		// Course-wide exam.
 		const examPanel = main.createDiv({ cls: "rl-panel" });
@@ -532,10 +613,11 @@ export class RecallLabView extends ItemView {
 		await this.launch(bank, picked);
 	}
 
-	private async launch(bank: Bank, picked: ExamItem[]): Promise<void> {
+	private async launch(bank: Bank, picked: ExamItem[], kind: "exam" | "review" = "exam"): Promise<void> {
 		if (!picked.length) { new Notice("Recall Lab: that quiz has no questions."); return; }
 		this.bank = bank;
 		this.examItems = picked;
+		this.sessionKind = kind;
 		this.index = 0;
 		this.answers = [];
 		this.sessionId = `s-${Date.now().toString(36)}`;
@@ -656,6 +738,7 @@ export class RecallLabView extends ItemView {
 		const live: LiveAnswer = { q, bankId: item.bankId, response: state.text || describeChoice(q, state.chosen), image: state.image, ms };
 		if (local) {
 			live.attempt = this.attemptFrom(item, live.response, local.score, local.verdict, local.feedback, local.missing, "local", ms);
+			this.keep(live.attempt);
 			this.answers.push(live);
 			this.showFeedback(q, live, wrap);
 			return;
@@ -675,8 +758,17 @@ export class RecallLabView extends ItemView {
 			live.attempt = this.attemptFrom(item, live.response, marked.score, marked.verdict,
 				[marked.feedback, marked.improve].filter(Boolean).join(" "), marked.missing, "ai", ms);
 		}
+		this.keep(live.attempt);
 		panel.remove();
 		this.showFeedback(q, live, wrap);
+	}
+
+	/** Saves an answer as soon as it is marked. A failure is reported, never dropped silently. */
+	private keep(attempt: Attempt): void {
+		this.plugin.store.recordAttempt(attempt).catch((e) => {
+			this.plugin.log.error("could not save an answer", { question: attempt.questionId, error: String(e) });
+			new Notice(`Recall Lab could not save that answer: ${String(e)}`, 10000);
+		});
 	}
 
 	/**
@@ -767,26 +859,42 @@ export class RecallLabView extends ItemView {
 			.map(([t, s]) => ({ t, m: s.reduce((x, y) => x + y, 0) / s.length }))
 			.filter((e) => e.m < 80).sort((a, b) => a.m - b.m).map((e) => e.t);
 
+		const review = this.sessionKind === "review";
 		const summary: SessionSummary = {
 			id: this.sessionId, ts: new Date().toISOString(),
-			bankId: this.bank!.id, bankTitle: this.bank!.title, tier: "mixed",
+			bankId: this.bank!.id, bankTitle: this.bank!.title, tier: review ? "review" : "mixed",
 			asked: this.answers.length, meanScore, grade: letterGrade(meanScore),
-			weakTopics, coachingPending: true,
+			weakTopics, coachingPending: !review,
 		};
 
+		// Queued behind the answers already being saved, so once it is written
+		// the progress file holds every answer of this session.
+		await this.plugin.store.recordSession(summary);
 		const course = await this.courseForBank(this.bank!);
 		let axes: AxisScore[] = [];
 		if (course) {
-			const prior = await this.plugin.store.readProgress();
-			axes = scoreAxes(course, Store.banksForCourse(course, this.banks), new AnswerIndex([...prior.attempts, ...graded]));
+			const progress = await this.plugin.store.readProgress();
+			axes = scoreAxes(course, Store.banksForCourse(course, this.banks), new AnswerIndex(progress.attempts));
 		}
 
-		await this.plugin.store.recordSession(graded, summary);
 		this.screen = "results";
 		await this.render();
 
-		// Fetch the coaching right away and drop it into the panel when it lands.
-		void this.fetchCoaching(summary, axes);
+		// An exam's coaching is fetched right away and dropped into the panel
+		// when it lands. A review stays offline; its feedback is one click away.
+		if (!review) void this.fetchCoaching(summary, axes);
+	}
+
+	/** Asks Claude for a review's feedback, which reviews never fetch on their own. */
+	private async requestCoaching(summary: SessionSummary): Promise<void> {
+		this.coachingInFlight.add(summary.id);
+		await this.render();
+		try {
+			await this.fetchCoaching(summary, []);
+		} finally {
+			this.coachingInFlight.delete(summary.id);
+		}
+		if (this.screen === "results" && this.sessionId === summary.id) await this.render();
 	}
 
 	private async fetchCoaching(summary: SessionSummary, axes: AxisScore[]): Promise<void> {
@@ -825,9 +933,13 @@ export class RecallLabView extends ItemView {
 		hero.createDiv({ cls: "rl-result-grade", text: letterGrade(meanScore) });
 		hero.createDiv({ cls: "rl-result-score", text: `${meanScore}%` });
 		const byAi = graded.filter((a) => a.gradedBy === "ai").length;
+		const now = new Date();
+		const memory = new Memory(progress.attempts, this.plugin.settings.targetRecall / 100);
+		const tomorrow = memory.forecast(now, 2, keysOf(Store.itemsOf(this.banks)))[1];
 		hero.createDiv({
 			cls: "rl-result-sub",
-			text: `${graded.length} question${graded.length === 1 ? "" : "s"}${byAi ? ` · ${byAi} marked by Claude` : ""}`,
+			text: `${graded.length} question${graded.length === 1 ? "" : "s"}${byAi ? ` · ${byAi} marked by Claude` : ""}` +
+				` · ${tomorrow} due for review tomorrow`,
 		});
 
 		this.renderCoaching(main, session);
@@ -858,6 +970,16 @@ export class RecallLabView extends ItemView {
 		panel.createDiv({ cls: "rl-model-label", text: "Feedback from Claude" });
 		if (session?.coaching) {
 			void this.md(session.coaching, panel.createDiv());
+			return;
+		}
+		if (session && !session.coachingPending && !this.coachingInFlight.has(session.id)) {
+			panel.createDiv({
+				cls: "rl-muted",
+				text: "Reviews stay offline. Ask for feedback if you want Claude to look for the pattern behind your mistakes.",
+			});
+			new ButtonComponent(panel.createDiv({ cls: "rl-actions" }))
+				.setButtonText("Get feedback (uses Claude)")
+				.onClick(() => void this.requestCoaching(session));
 			return;
 		}
 		const row = panel.createDiv({ cls: "rl-fb-head" });
@@ -1035,7 +1157,7 @@ export class RecallLabView extends ItemView {
 			s.createDiv({ cls: "rl-stat-label", text: label });
 		};
 		const mean = Math.round(progress.sessions.reduce((s, x) => s + x.meanScore, 0) / progress.sessions.length);
-		stat("Exams taken", String(progress.sessions.length));
+		stat("Sessions", String(progress.sessions.length));
 		stat("Questions answered", String(progress.attempts.length));
 		stat("Mean score", `${mean}%`);
 		stat("Notes completed", String(Object.keys(progress.completed ?? {}).length));

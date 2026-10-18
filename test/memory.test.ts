@@ -1,0 +1,122 @@
+import { test } from "node:test";
+import { strict as assert } from "node:assert";
+import { Rating } from "ts-fsrs";
+import { Memory, describeWhen, keyOf, keysOf, planReview, ratingFor } from "../src/memory";
+import { Store } from "../src/store";
+import { qkey, type Bank } from "../src/types";
+import { attempt, question } from "./helpers";
+
+const DAY = 86_400_000;
+const NOW = new Date(2026, 9, 18, 12, 0); // local noon, 18 Oct 2026
+const ago = (days: number) => new Date(NOW.getTime() - days * DAY).toISOString();
+const memoryOf = (...attempts: ReturnType<typeof attempt>[]) => new Memory(attempts, 0.9);
+
+test("a miss rates Again, a partial answer Hard, a correct one Good", () => {
+	assert.equal(ratingFor(attempt("a", "q1", 0)), Rating.Again);
+	assert.equal(ratingFor(attempt("a", "q1", 60)), Rating.Hard);
+	assert.equal(ratingFor(attempt("a", "q1", 100)), Rating.Good);
+});
+
+test("a correct answer is spaced out further than a missed one", () => {
+	const m = memoryOf(attempt("a", "right", 100, ago(0)), attempt("a", "wrong", 0, ago(0)));
+	const gap = (id: string) => (m.card(qkey("a", id))!.due.getTime() - NOW.getTime()) / DAY;
+	assert.ok(gap("right") > gap("wrong"), `right ${gap("right")}d vs wrong ${gap("wrong")}d`);
+	assert.ok(gap("wrong") <= 1.5, "a missed question should come back within about a day");
+});
+
+test("replaying the same history gives the same schedule", () => {
+	const history = [attempt("a", "q1", 100, ago(20)), attempt("a", "q1", 100, ago(15)), attempt("a", "q1", 60, ago(3))];
+	const due = () => new Memory(history, 0.9).card(qkey("a", "q1"))!.due.getTime();
+	assert.equal(due(), due());
+});
+
+test("memory is per bank: answering a/q1 says nothing about b/q1", () => {
+	const m = memoryOf(attempt("a", "q1", 100, ago(1)));
+	assert.ok(m.has(qkey("a", "q1")));
+	assert.ok(!m.has(qkey("b", "q1")));
+	assert.equal(m.recall(qkey("b", "q1"), NOW), null);
+});
+
+test("recall fades with time", () => {
+	const m = memoryOf(attempt("a", "q1", 100, ago(2)));
+	const soon = m.recall(qkey("a", "q1"), NOW)!;
+	const later = m.recall(qkey("a", "q1"), new Date(NOW.getTime() + 30 * DAY))!;
+	assert.ok(soon > later && later > 0 && soon <= 1);
+});
+
+test("replaying up to a moment ignores later answers", () => {
+	const history = [attempt("a", "q1", 100, ago(10)), attempt("a", "q2", 100, ago(1))];
+	const then = new Memory(history, 0.9, new Date(NOW.getTime() - 5 * DAY));
+	assert.ok(then.has(qkey("a", "q1")));
+	assert.ok(!then.has(qkey("a", "q2")));
+});
+
+test("forecast and nextDue only count questions in scope", () => {
+	const m = memoryOf(attempt("a", "q1", 0, ago(0)), attempt("gone", "q1", 0, ago(0)));
+	const scope = new Set([qkey("a", "q1")]);
+	assert.equal(m.forecast(NOW, 3, scope).reduce((x, y) => x + y, 0), 1);
+	assert.ok(m.nextDue(NOW, scope));
+	assert.equal(m.nextDue(NOW, new Set()), null);
+});
+
+// ------------------------------------------------------------ planReview
+
+const started: Bank = {
+	id: "a", title: "A", note: "C/a.md",
+	questions: [question("q1"), question("q2"), question("q3"), question("q4"), question("q5", { tier: "hard" })],
+};
+const completedNote: Bank = { id: "b", title: "B", note: "C/b.md", questions: [question("q1")] };
+const unread: Bank = { id: "c", title: "C", note: "C/c.md", questions: [question("q1")] };
+const banks = [started, completedNote, unread];
+const noteOf = (id: string) => banks.find((b) => b.id === id)?.note;
+
+function plan(newPerDay: number) {
+	const memory = memoryOf(
+		attempt("a", "q1", 100, ago(30)),
+		attempt("a", "q2", 0, ago(3)),
+		attempt("a", "q3", 100, new Date(NOW.getTime() - 3_600_000).toISOString()), // first answered today
+	);
+	return {
+		memory,
+		plan: planReview({
+			items: Store.itemsOf(banks), memory, now: NOW, newPerDay,
+			completed: { "C/b.md": ago(5) }, noteOf,
+		}),
+	};
+}
+
+test("everything due comes first, closest to forgotten at the top", () => {
+	const { plan: p, memory } = plan(0);
+	assert.deepEqual(p.due.map(keyOf).sort(), [qkey("a", "q1"), qkey("a", "q2")]);
+	const recalls = p.due.map((it) => memory.recall(keyOf(it), NOW)!);
+	assert.ok(recalls[0] <= recalls[1]);
+	assert.equal(p.fresh.length, 0);
+});
+
+test("new questions come only from completed or examined notes, completed first", () => {
+	const { plan: p } = plan(10);
+	const fresh = p.fresh.map(keyOf);
+	assert.equal(fresh[0], qkey("b", "q1"), "the completed note leads");
+	assert.ok(!fresh.includes(qkey("c", "q1")), "a note never read is never drawn from");
+	assert.deepEqual(fresh.slice(1), [qkey("a", "q4"), qkey("a", "q5")], "easy before hard");
+});
+
+test("the day's allowance counts new questions already met today", () => {
+	// a/q3 was first answered today, so an allowance of 2 leaves room for 1.
+	assert.equal(plan(2).plan.fresh.length, 1);
+	assert.equal(plan(1).plan.fresh.length, 0);
+});
+
+test("keysOf covers every item", () => {
+	assert.equal(keysOf(Store.itemsOf(banks)).size, 7);
+});
+
+test("describeWhen speaks plainly", () => {
+	const at = (h: number) => new Date(NOW.getTime() + h * 3_600_000);
+	assert.equal(describeWhen(at(0.5), NOW), "within the hour");
+	assert.equal(describeWhen(at(3), NOW), "in 3 hours");
+	assert.equal(describeWhen(at(24), NOW), "tomorrow");
+	assert.equal(describeWhen(at(24 * 4), NOW), "in 4 days");
+	assert.match(describeWhen(at(24 * 30), NOW), /^on /);
+	assert.equal(describeWhen(at(-1), NOW), "now");
+});

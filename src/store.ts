@@ -174,9 +174,19 @@ export class Store {
 		});
 	}
 
-	async recordSession(attempts: Attempt[], summary: SessionSummary): Promise<ProgressFile> {
+	/**
+	 * Saves one answer the moment it is marked, so leaving a session early —
+	 * or Obsidian closing mid-session — loses nothing already answered.
+	 */
+	async recordAttempt(attempt: Attempt): Promise<void> {
+		await this.update((data) => {
+			data.attempts.push(attempt);
+		});
+	}
+
+	/** Saves a finished session's summary; its answers were saved as they came. */
+	async recordSession(summary: SessionSummary): Promise<ProgressFile> {
 		return this.update((data) => {
-			data.attempts.push(...attempts);
 			data.sessions.push(summary);
 		});
 	}

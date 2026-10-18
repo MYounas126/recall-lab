@@ -18,7 +18,7 @@ function storeOn(vault: ReturnType<typeof makeVault>): Store {
 test("changes made at the same moment are all kept", async () => {
 	const vault = makeVault();
 	const store = storeOn(vault);
-	await store.recordSession([], session);
+	await store.recordSession(session);
 	await Promise.all([
 		store.saveLabProgress(lab),
 		store.markComplete("Notes/a.md"),
@@ -36,7 +36,7 @@ test("completion marks and lab progress survive finishing an exam", async () => 
 	const store = storeOn(vault);
 	await store.markComplete("Notes/a.md");
 	await store.saveLabProgress(lab);
-	await store.recordSession([], session);
+	await store.recordSession(session);
 	const data = JSON.parse(vault.files.get(PATH)!);
 	assert.ok(data.completed?.["Notes/a.md"]);
 	assert.ok(data.labs?.lab1);
@@ -59,6 +59,6 @@ test("an empty read never shares state with the last one", async () => {
 
 test("saveCoaching reports a session that no longer exists", async () => {
 	const store = storeOn(makeVault(0));
-	await store.recordSession([], session);
+	await store.recordSession(session);
 	assert.equal(await store.saveCoaching("gone", "x"), false);
 });
