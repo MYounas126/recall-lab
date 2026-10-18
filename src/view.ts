@@ -15,7 +15,9 @@ import {
 } from "./memory";
 import { keyAction } from "./keys";
 import { RecallStage, optionsHidden, recallApplies } from "./recall";
-import { AnswerState, blankSize, describeResponse, notReady, plain, scrambled } from "./answers";
+import {
+	AnswerState, answeredTo, blankSize, describeResponse, notReady, plain, questionDetail, questionLine, scrambled,
+} from "./answers";
 import { needingVariants, withVariants } from "./variants";
 import { findLeeches } from "./leeches";
 import { checkFlag } from "./labs";
@@ -452,7 +454,7 @@ export class RecallLabView extends ItemView {
 		for (const leech of leeches.slice(0, 5)) {
 			const row = panel.createDiv({ cls: "rl-review-row" });
 			row.createSpan({ cls: "rl-chip", text: `missed ${leech.misses}×` });
-			void this.md(leech.item.q.prompt.split("\n")[0], row.createDiv({ cls: "rl-review-q" }));
+			void this.md(questionLine(leech.item.q), row.createDiv({ cls: "rl-review-q" }));
 			const actions = row.createDiv({ cls: "rl-actions" });
 			if (progress.clinic?.[leech.key]) {
 				new ButtonComponent(actions).setButtonText("Open diagnosis").setCta()
@@ -486,11 +488,17 @@ export class RecallLabView extends ItemView {
 		question.createEl("h3", { text: `The question you have missed ${wrong.length} times` });
 		await this.md(q.prompt, question.createDiv());
 		if (q.code) question.createEl("pre", { cls: "rl-code" }).createEl("code", { text: q.code });
+		const detail = questionDetail(q);
+		if (detail) await this.md(detail, question.createDiv());
 		if (wrong.length) {
 			const recent = question.createDiv({ cls: "rl-model" });
 			recent.createDiv({ cls: "rl-model-label", text: "Your most recent wrong answers" });
 			const ul = recent.createEl("ul");
-			for (const a of wrong.slice(-3)) ul.createEl("li", { text: a.response || "(blank)" });
+			const to = { variant: " (to a variant of it)", practice: " (to the practice question)" };
+			for (const a of wrong.slice(-3)) {
+				const whose = answeredTo(a);
+				ul.createEl("li", { text: `${a.response || "(blank)"}${whose ? to[whose] : ""}` });
+			}
 		}
 
 		const what = main.createDiv({ cls: "rl-panel rl-panel-confident" });

@@ -5,9 +5,11 @@ import { Attempt, Bank, ExamItem, Question } from "./types";
  * A question is mature once its last two answers were both right, and not
  * guesses. By then its look — the option's position, its wording — can carry
  * the answer on its own, so a variant tests the idea better than the original.
+ * Answers to the leech clinic's practice question do not count: retaking the
+ * same practice question twice says nothing about the original.
  */
 export function isMature(history: Attempt[]): boolean {
-	const last = history.slice(-2);
+	const last = history.filter((a) => !a.variant?.endsWith("~fix")).slice(-2);
 	return last.length === 2 && last.every((a) => a.verdict === "correct" && a.confidence !== "guess");
 }
 

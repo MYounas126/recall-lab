@@ -6,7 +6,7 @@ import type { Leech } from "./leeches";
 import { hashFlag, validateLab, detectToolchain, describeToolchain } from "./labs";
 import type { Strictness } from "./settings";
 import { hashText } from "./util";
-import { plain } from "./answers";
+import { answeredTo, plain } from "./answers";
 
 export interface MarkResult {
 	score: number;
@@ -502,8 +502,9 @@ export function leechPrompt(q: Question, wrong: Attempt[], noteTitle: string, no
 		"THE QUESTION:",
 		JSON.stringify(question, null, 1),
 		"",
-		"THEIR WRONG ANSWERS, OLDEST FIRST:",
-		...wrong.map((a, i) => `${i + 1}. They said: ${a.response || "(blank)"}${a.feedback ? ` | Marked: ${a.feedback}` : ""}`),
+		"THEIR WRONG ANSWERS, OLDEST FIRST (some were to a variant of the question or to an earlier practice",
+		"question on the same idea; each says so, and the variant's prompt is given):",
+		...wrong.map((a, i) => `${i + 1}. ${answeredToLabel(q, a)}They said: ${a.response || "(blank)"}${a.feedback ? ` | Marked: ${a.feedback}` : ""}`),
 		"",
 		`NOTE TITLE: ${noteTitle}`,
 		"NOTE CONTENT:",
@@ -511,6 +512,17 @@ export function leechPrompt(q: Question, wrong: Attempt[], noteTitle: string, no
 		noteContent,
 		"---",
 	].join("\n");
+}
+
+/** For the prompt: which question a wrong answer was given to, when not the original. */
+function answeredToLabel(q: Question, a: Attempt): string {
+	const to = answeredTo(a);
+	if (to === "practice") return "[To the earlier practice question] ";
+	if (to === "variant") {
+		const v = q.variants?.find((x) => x.id === a.variant);
+		return v ? `[To a variant: ${JSON.stringify(v.prompt)}] ` : "[To a variant] ";
+	}
+	return "";
 }
 
 /**

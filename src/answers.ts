@@ -1,5 +1,5 @@
-import { Response } from "./grader";
-import { Question } from "./types";
+import { Response, clozePieces } from "./grader";
+import { Attempt, Question } from "./types";
 import { shuffled } from "./util";
 
 /**
@@ -48,6 +48,39 @@ export function describeResponse(q: Question, s: AnswerState): string {
 	}
 }
 
+
+/**
+ * A question in one line, for lists. A cloze shows its sentence with the
+ * blanks empty, since its prompt is only ever "Fill in the blank."; any
+ * other type shows the first line of its prompt.
+ */
+export function questionLine(q: Question): string {
+	if (q.type === "cloze" && q.cloze) return clozePieces(q.cloze).join("＿＿＿");
+	return q.prompt.split("\n")[0];
+}
+
+/**
+ * What the question gives you to work with, beyond its prompt and code, as
+ * markdown: a cloze's sentence, an order question's steps and a match
+ * question's left-hand items, the last two alphabetically so as not to
+ * give the answer away.
+ */
+export function questionDetail(q: Question): string {
+	const sorted = (xs: string[]) => xs.slice().sort((a, b) => plain(a).localeCompare(plain(b)));
+	if (q.type === "cloze" && q.cloze) return clozePieces(q.cloze).join("＿＿＿");
+	if (q.type === "order" && q.items?.length) return sorted(q.items).map((it) => `- ${it}`).join("\n");
+	if (q.type === "match" && q.pairs?.length) return sorted(q.pairs.map(([left]) => left)).map((it) => `- ${it}`).join("\n");
+	return "";
+}
+
+/**
+ * Whose answer this was, when not the question's own: a variant asked in its
+ * place, or the leech clinic's practice question. Null for the question itself.
+ */
+export function answeredTo(a: Attempt): "variant" | "practice" | null {
+	if (!a.variant) return null;
+	return a.variant.endsWith("~fix") ? "practice" : "variant";
+}
 
 /** Inline code spans: a run of backticks, the code, and the same run again. */
 const CODE_SPAN = /(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/g;

@@ -33,6 +33,26 @@ test("the diagnosis prompt shows the question and every recent wrong answer", ()
 	assert.match(prompt, /The note\./);
 });
 
+test("practice-question retakes neither cure a leech nor make it mature", () => {
+	const bank: Bank = { id: "a", title: "A", questions: [question("q1")] };
+	const misses = [1, 2, 3, 4].map((d) => attempt("a", "q1", 0, `2026-10-0${d}T10:00:00.000Z`));
+	const practice = [5, 6].map((d) => attempt("a", "q1", 100, `2026-10-0${d}T10:00:00.000Z`, { variant: "q1~fix" }));
+	const leeches = findLeeches([bank], new AnswerIndex([...misses, ...practice]), 4);
+	assert.equal(leeches.length, 1, "still a leech: the original was never answered right");
+});
+
+test("the prompt says which wrong answers were to a variant or the practice question", () => {
+	const q = question("q1", { variants: [question("q1~v1", { prompt: "Which register holds the result?" })] });
+	const prompt = leechPrompt(q, [
+		attempt("a", "q1", 0, undefined, { response: "rbx" }),
+		attempt("a", "q1", 0, undefined, { response: "rcx", variant: "q1~v1" }),
+		attempt("a", "q1", 0, undefined, { response: "0x60", variant: "q1~fix" }),
+	], "Note", "content");
+	assert.match(prompt, /1\. They said: rbx/);
+	assert.match(prompt, /2\. \[To a variant: "Which register holds the result\?"\] They said: rcx/);
+	assert.match(prompt, /3\. \[To the earlier practice question\] They said: 0x60/);
+});
+
 test("a diagnosis needs a misconception, a lesson and a usable fresh question", () => {
 	const original = question("q1", { tier: "hard", topic: "numbers" });
 	const fresh = { type: "mcq", prompt: "And number 1?", choices: ["RCX", "RAX"], answer: 0, explain: "" };
