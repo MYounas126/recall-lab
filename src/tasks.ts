@@ -4,6 +4,7 @@ import { Store } from "./store";
 import { Bank, Course, Lab, Question, Verdict } from "./types";
 import { hashFlag, validateLab, detectToolchain, describeToolchain } from "./labs";
 import type { Strictness } from "./settings";
+import { hashText } from "./util";
 
 export interface MarkResult {
 	score: number;
@@ -527,5 +528,38 @@ export function validateBank(bank: Bank, course: Course): string | null {
 			q.rubric = [q.expected ?? "A correct, complete answer."];
 		}
 	}
+
+	// Each question's id comes from its content, so rebuilding a quiz gives a
+	// changed question a new id, and a fresh history, while an unchanged one
+	// keeps its own. Numbering them q1, q2… handed a rebuilt quiz's new q3 the
+	// old q3's answers and schedule.
+	const taken = new Set<string>();
+	for (const q of bank.questions) {
+		const base = contentId(q);
+		let id = base;
+		for (let n = 2; taken.has(id); n++) id = `${base}-${n}`;
+		taken.add(id);
+		q.id = id;
+	}
 	return null;
+}
+
+/** Fields that do not change which question it is: its id, explanation and bookkeeping. */
+const NOT_IDENTITY = new Set([
+	"id", "explain", "ref", "topic", "axis", "tier", "timestamp", "slide", "rubric", "expected", "accept", "variants", "steps",
+]);
+
+/**
+ * A question's id derived from what it asks: its type, prompt, code and
+ * answer data, with keys sorted so the generator's field order does not
+ * matter. Editing an explanation keeps the id; changing the question makes
+ * a new one.
+ */
+export function contentId(q: Question): string {
+	const fields = q as unknown as Record<string, unknown>;
+	const core = Object.keys(fields)
+		.filter((k) => !NOT_IDENTITY.has(k))
+		.sort()
+		.map((k) => [k, fields[k]]);
+	return `q-${hashText(JSON.stringify(core))}`;
 }

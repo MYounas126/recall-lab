@@ -278,6 +278,14 @@ export class Store {
 			const short = want - got.length;
 			if (short > 0 && tier !== "brutal") split[tier === "easy" ? "hard" : "brutal"] += short;
 		}
+		// Donations only flow to harder tiers, so a bank thin in hard or brutal
+		// questions would still come up short; top up from what is left.
+		for (const tier of TIERS) {
+			if (out.length >= total) break;
+			const taken = new Set(out);
+			const rest = items.filter((it) => !taken.has(it));
+			out.push(...Store.pickQuestions(rest, index, tier, total - out.length, false));
+		}
 		return out;
 	}
 
