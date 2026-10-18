@@ -210,6 +210,69 @@ export class Tasks {
 		return out;
 	}
 
+	// --------------------------------------------------------------- variants
+
+	/**
+	 * Writes variants for some of a bank's questions and saves them into the
+	 * bank file. The file is read again just before the write, so an edit made
+	 * while Claude was working is kept, and a question that changed meanwhile
+	 * (the quiz rebuilt, say) gets nothing: Claude's variants are of the
+	 * question as it was. Returns how many variants were added.
+	 */
+	async generateVariants(bank: Bank, path: string, ids: string[], perQuestion = 2): Promise<number | { error: string }> {
+		const targets = bank.questions.filter((q) => ids.includes(q.id));
+		if (!targets.length) return 0;
+		const note = bank.note ? this.app.vault.getAbstractFileByPath(bank.note) : null;
+		const content = note instanceof TFile ? await this.app.vault.cachedRead(note) : "";
+		const title = note instanceof TFile ? note.basename : bank.title;
+
+		const res = await this.cli.askJson<{ variants?: Record<string, Question[]> }>(
+			variantPrompt(title, content, targets, perQuestion),
+			300000
+		);
+		if (!res.ok) return { error: res.error };
+
+		const file = this.app.vault.getAbstractFileByPath(path);
+		if (!(file instanceof TFile)) return { error: `${path} is gone.` };
+		let fresh: Bank;
+		try {
+			fresh = JSON.parse(await this.app.vault.read(file)) as Bank;
+			if (!Array.isArray(fresh?.questions)) throw new Error("it has no questions");
+		} catch (e) {
+			return { error: `${path} could not be read back (${(e as Error).message}).` };
+		}
+
+		let added = 0;
+		const rejected: string[] = [];
+		for (const target of targets) {
+			const q = fresh.questions.find((x) => x.id === target.id);
+			const raw = res.data?.variants?.[target.id];
+			if (!q || !Array.isArray(raw)) continue;
+			if (contentId(q) !== contentId(target)) {
+				rejected.push(`${q.id}: the question changed while its variants were written`);
+				continue;
+			}
+			const kept = q.variants ?? [];
+			for (const v of raw) {
+				const problem = checkVariant(q, v);
+				if (problem) {
+					rejected.push(`${q.id}: ${problem}`);
+					continue;
+				}
+				v.id = `${q.id}~v${kept.length + 1}`;
+				kept.push(v);
+				added += 1;
+			}
+			if (kept.length) q.variants = kept;
+		}
+		if (rejected.length) console.warn(`Recall Lab: dropped ${rejected.length} variants:`, rejected);
+		if (!added) {
+			return { error: `None of Claude's variants were usable${rejected.length ? `: ${rejected.slice(0, 3).join("; ")}` : ""}.` };
+		}
+		await this.writeFile(path, JSON.stringify(fresh, null, 2) + "\n");
+		return added;
+	}
+
 	// ------------------------------------------------------------- generation
 
 	/** Reads a note, asks Claude for a bank, writes it, returns the bank. */
@@ -402,6 +465,68 @@ export function labPrompt(
 		content,
 		"---",
 	].join("\n");
+}
+
+/** The prompt that asks for variants of some questions. Pure, so it can be tested. */
+export function variantPrompt(title: string, content: string, questions: Question[], perQuestion: number): string {
+	return [
+		`Write ${perQuestion} VARIANTS of each question below. Reply with ONLY a JSON object, no prose and no fence.`,
+		"",
+		"A variant tests exactly the same fact or skill as its original but looks different: another register,",
+		"other numbers, a different scenario or wording, new distractors. Someone who only memorised the",
+		"original's answer — its position, wording or shape — must not be able to answer the variant from that.",
+		"Someone who understands the idea must find it no harder.",
+		"",
+		"RULES",
+		"- Keep each variant's \"type\" the same as its original's, with every field that type needs.",
+		"- Every fact must come from the note. Vary the surface, never the truth.",
+		"- For mcq, \"answer\" is a 0-based index into \"choices\" and must point at the option your \"explain\"",
+		"  justifies. Vary which position the right answer sits in.",
+		"",
+		'SHAPE: {"variants":{"<original id>":[{"type":"...","prompt":"...", ...every field the type needs..., "explain":"..."}]}}',
+		"",
+		"QUESTIONS:",
+		JSON.stringify(questions.map(({ variants: _v, ...q }) => q), null, 1),
+		"",
+		`NOTE TITLE: ${title}`,
+		"NOTE CONTENT:",
+		"---",
+		content,
+		"---",
+	].join("\n");
+}
+
+/**
+ * Checks one variant against its original, and fills in what it shares with
+ * it — tier, topic, axis and ref — since it tests the same idea. Returns
+ * what is wrong, or null if it is usable.
+ */
+export function checkVariant(original: Question, v: Question): string | null {
+	if (!v || typeof v !== "object") return "is not a question";
+	if (v.type !== original.type) return `is a ${v.type} question, not a ${original.type}`;
+	if (!v.prompt?.trim()) return "has no prompt";
+	v.tier = original.tier;
+	v.topic = original.topic;
+	if (original.axis) v.axis = original.axis;
+	if (original.ref) v.ref = original.ref;
+	if (!v.explain) v.explain = "";
+	delete v.variants;
+	if (v.type === "mcq") {
+		if (!Array.isArray(v.choices) || v.choices.length < 2) return "has no options";
+		if (typeof v.answer !== "number" || v.answer < 0 || v.answer >= v.choices.length) return "has no valid answer index";
+		const fixed = reconcileAnswer(v);
+		if (fixed !== null) v.answer = fixed;
+	}
+	if (v.type === "multi") {
+		if (!Array.isArray(v.choices) || !Array.isArray(v.answer)) return "has no answer set";
+		v.answer = (v.answer as number[]).filter((n) => n >= 0 && n < v.choices!.length);
+		if (!v.answer.length) return "has no answer set";
+	}
+	if (v.type === "short" || v.type === "command" || v.type === "image") {
+		if (!v.expected) return "has no model answer";
+		if (!v.rubric?.length) v.rubric = [v.expected];
+	}
+	return checkInteractive(v);
 }
 
 /** The exact prompt the plugin sends for a bank. Pure, so it can be tested. */

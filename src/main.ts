@@ -6,7 +6,8 @@ import { Tasks } from "./tasks";
 import { LabStore } from "./labs";
 import { Log } from "./log";
 import { ConfirmModal, RecallLabView, VIEW_TYPE_RECALL } from "./view";
-import { Bank, Course } from "./types";
+import { Bank, Course, Question } from "./types";
+import { needingVariants } from "./variants";
 import { SerialQueue } from "./util";
 import { AnswerIndex } from "./history";
 import { Memory, dateKey, describeAgo, endOfDay, expectedScore, keyOf } from "./memory";
@@ -123,6 +124,7 @@ export default class RecallLabPlugin extends Plugin {
 			},
 		});
 		this.addCommand({ id: "remove-leftovers", name: "Remove leftover quizzes, labs and courses", callback: () => void this.removeLeftovers() });
+		this.addCommand({ id: "write-variants", name: "Write variants for mature questions", callback: () => void this.offerVariants() });
 
 		// The "Complete" footer at the bottom of every note inside a course folder.
 		this.registerEvent(this.app.workspace.on("file-open", () => this.queueFooters()));
@@ -605,6 +607,68 @@ export default class RecallLabPlugin extends Plugin {
 			10000
 		);
 		await this.refreshView();
+	}
+
+	/**
+	 * Writes variants for mature questions, one Claude request per quiz, each
+	 * through the generation queue. Only ever started from a confirmation.
+	 */
+	async buildVariants(targets: { bank: Bank; questions: Question[] }[]): Promise<void> {
+		let added = 0;
+		let failed = 0;
+		let elsewhere = 0;
+		for (const { bank, questions } of targets) {
+			// One quiz going wrong must not stop the rest, or end the run
+			// without saying what happened.
+			let res: number | { error: string } | null;
+			try {
+				const path = this.store.bankPath(bank.id);
+				res = await this.build(`variants:${bank.id}`, `variants for "${bank.title}"`, async () => {
+					this.log.info("writing variants", { bank: bank.id, questions: questions.length });
+					const notice = new Notice(`Writing variants for "${bank.title}"…`, 0);
+					try {
+						return await this.tasks.generateVariants(bank, path, questions.map((q) => q.id));
+					} finally {
+						notice.hide();
+					}
+				});
+			} catch (e) {
+				res = { error: String(e) };
+			}
+			if (res === null) {
+				elsewhere += 1; // already queued, or the plugin is unloading
+			} else if (typeof res === "number") {
+				added += res;
+				this.log.info("variants written", { bank: bank.id, added: res });
+			} else {
+				failed += 1;
+				this.log.error("variants failed", { bank: bank.id, error: res.error });
+			}
+		}
+		if (this.unloaded) return;
+		const parts = [`Wrote ${added} variant${added === 1 ? "" : "s"}`];
+		if (failed) parts.push(`${failed} quiz${failed === 1 ? "" : "zes"} failed (see the log)`);
+		if (elsewhere) parts.push(`${elsewhere} already queued`);
+		new Notice(`${parts.join("; ")}.`, 8000);
+		await this.refreshView();
+	}
+
+	/** Offers to write variants for every mature question that has none, across all courses. */
+	private async offerVariants(): Promise<void> {
+		const [banks, progress] = await Promise.all([this.store.listBanks(), this.store.readProgress()]);
+		const needing = needingVariants(banks, new AnswerIndex(progress.attempts));
+		const n = needing.reduce((s, b) => s + b.questions.length, 0);
+		if (!n) {
+			new Notice("No question needs variants yet: a question qualifies once you have answered it right twice running.");
+			return;
+		}
+		new ConfirmModal(
+			this.app,
+			`Write variants for ${n} question${n === 1 ? "" : "s"}?`,
+			`Claude writes two variants of each, one request per quiz (${needing.length}). This uses your Claude plan.`,
+			"Write variants",
+			() => void this.buildVariants(needing)
+		).open();
 	}
 
 	/**

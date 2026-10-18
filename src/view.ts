@@ -4,7 +4,7 @@ import { Store } from "./store";
 import { clozeBlanks, clozePieces, gradeLocally, sameValue } from "./grader";
 import { shuffled } from "./util";
 import { QuestionScore, renderRadar, scoreAxes, scoreCourses, weakestTested, untested, withBefore, AxisScore } from "./radar";
-import { Attempt, Bank, Confidence, Course, ExamItem, Lab, LabProgress, ProgressFile, Question, SessionSummary, Tier, labScore, letterGrade } from "./types";
+import { Attempt, Bank, Confidence, Course, ExamItem, Lab, LabProgress, ProgressFile, Question, SessionSummary, Tier, idOf, labScore, letterGrade } from "./types";
 import { AnswerIndex, calibration } from "./history";
 import {
 	DayRecord, Memory, ReviewPlan, counts, describeWhen, endOfDay, expectedScore, keysOf, planReview, settledRecord, startOfDay,
@@ -13,6 +13,7 @@ import {
 import { keyAction } from "./keys";
 import { RecallStage, optionsHidden, recallApplies } from "./recall";
 import { AnswerState, blankSize, describeResponse, notReady, plain, scrambled } from "./answers";
+import { needingVariants, withVariants } from "./variants";
 import { checkFlag } from "./labs";
 import { INSTALL_HINT } from "./claude";
 
@@ -411,6 +412,34 @@ export class RecallLabView extends ItemView {
 		}
 	}
 
+	/**
+	 * Offers variants for the course's mature questions. Writing them uses
+	 * Claude, so it is a button behind a confirmation, never automatic.
+	 */
+	private renderVariantsPanel(main: HTMLElement, banks: Bank[], attempts: Attempt[]): void {
+		const needing = needingVariants(banks, new AnswerIndex(attempts));
+		const n = needing.reduce((s, b) => s + b.questions.length, 0);
+		if (!n) return;
+		const panel = main.createDiv({ cls: "rl-panel" });
+		panel.createEl("h3", { text: "Variants" });
+		panel.createDiv({
+			cls: "rl-muted",
+			text: `${n} question${n === 1 ? " has" : "s have"} been answered right twice running, so ${n === 1 ? "its" : "their"} ` +
+				"look may be carrying the answer. A variant tests the same idea dressed differently; reviews then ask it instead.",
+		});
+		new ButtonComponent(panel.createDiv({ cls: "rl-actions" }))
+			.setButtonText(`Write variants for ${n}…`)
+			.onClick(() => {
+				new ConfirmModal(
+					this.app,
+					`Write variants for ${n} question${n === 1 ? "" : "s"}?`,
+					`Claude writes two variants of each, one request per quiz (${needing.length}). This uses your Claude plan.`,
+					"Write variants",
+					() => void this.plugin.buildVariants(needing)
+				).open();
+			});
+	}
+
 	/** Starts today's review: across every course, or one course. */
 	async startReview(course?: Course): Promise<void> {
 		await this.refresh();
@@ -432,8 +461,9 @@ export class RecallLabView extends ItemView {
 	}
 
 	private async review(banks: Bank[], id: string, title: string, dueOnly = false): Promise<void> {
-		const { plan, memory, keys } = await this.planFor(banks);
-		const items = dueOnly ? plan.due : [...plan.due, ...plan.fresh];
+		const { plan, memory, keys, progress } = await this.planFor(banks);
+		// A mature question comes back as its next variant, if it has any.
+		const items = withVariants(dueOnly ? plan.due : [...plan.due, ...plan.fresh], new AnswerIndex(progress.attempts));
 		if (!items.length) {
 			const now = new Date();
 			const next = memory.nextDue(endOfDay(now), keys);
@@ -544,6 +574,7 @@ export class RecallLabView extends ItemView {
 
 		const reviewable = [...courseBanks, ...this.highlightsIn(folder)];
 		if (reviewable.length) await this.renderReviewPanel(main, reviewable, course);
+		this.renderVariantsPanel(main, courseBanks, progress.attempts);
 
 		// Course-wide exam.
 		const examPanel = main.createDiv({ cls: "rl-panel" });
@@ -791,6 +822,10 @@ export class RecallLabView extends ItemView {
 		const meta = card.createDiv({ cls: "rl-qmeta" });
 		meta.createSpan({ cls: "rl-chip", text: q.topic });
 		if (q.timestamp) meta.createSpan({ cls: "rl-chip rl-chip-dim", text: q.timestamp });
+		if (item.of) {
+			meta.createSpan({ cls: "rl-chip rl-chip-dim", text: "variant" })
+				.setAttr("aria-label", "A new look at a question you have answered right twice running");
+		}
 
 		await this.md(q.prompt, card.createDiv({ cls: "rl-prompt" }));
 		// Click-the-bug and trace questions draw their own numbered code.
@@ -1222,8 +1257,9 @@ export class RecallLabView extends ItemView {
 		const q = item.q;
 		return {
 			ts: new Date().toISOString(), sessionId: this.sessionId, bankId: item.bankId,
-			questionId: q.id, tier: q.tier, type: q.type, topic: q.topic,
+			questionId: idOf(item), tier: q.tier, type: q.type, topic: q.topic,
 			response, score, verdict, feedback, missing, gradedBy, ms,
+			...(item.of ? { variant: q.id } : {}),
 			...extra,
 		};
 	}
@@ -1431,7 +1467,7 @@ export class RecallLabView extends ItemView {
 
 	/** One answer to go back over: its topic, the question, what was wrong, and optionally why. */
 	private renderReviewRow(list: HTMLElement, a: Attempt, withExplanation: boolean): void {
-		const q = this.examItems.find((x) => x.bankId === a.bankId && x.q.id === a.questionId)?.q;
+		const q = this.examItems.find((x) => x.bankId === a.bankId && idOf(x) === a.questionId)?.q;
 		const row = list.createDiv({ cls: "rl-review-row" });
 		row.createSpan({ cls: "rl-chip", text: a.topic });
 		void this.md(q ? q.prompt.split("\n")[0] : a.questionId, row.createDiv({ cls: "rl-review-q" }));

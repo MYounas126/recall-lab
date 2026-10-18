@@ -1,12 +1,12 @@
 import { createEmptyCard, fsrs, Rating, type Card, type FSRS, type Grade } from "ts-fsrs";
-import { Attempt, DayLog, ExamItem, Tier, qkey } from "./types";
+import { Attempt, DayLog, ExamItem, Tier, idOf, qkey } from "./types";
 import { AnswerIndex } from "./history";
 
 const DAY = 86_400_000;
 
-/** A question's key, from the item an exam asks. */
+/** A question's key, from the item an exam asks. A variant shares its original's key. */
 export function keyOf(item: ExamItem): string {
-	return qkey(item.bankId, item.q.id);
+	return qkey(item.bankId, idOf(item));
 }
 
 /**
