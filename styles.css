@@ -587,6 +587,13 @@
 
 .rl-collapsed { display: none; }
 .rl-panel-confident { border-left: 3px solid var(--text-warning); }
+.rl-guided {
+	margin: 0.8rem 0; padding: 0.7rem 0.9rem;
+	border: 1px dashed var(--background-modifier-border); border-radius: 8px;
+}
+.rl-guided .rl-feedback { margin-top: 0.6rem; }
+.rl-unaided { font-weight: 600; }
+.rl-second-try .rl-text { margin: 0.5rem 0; }
 .rl-lesson { padding-left: 1.4rem; }
 .rl-lesson li { margin: 0.4rem 0; }
 .rl-lesson li p { margin: 0; }

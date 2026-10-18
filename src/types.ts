@@ -57,6 +57,8 @@ export interface Question {
 	trace?: TraceStep[];
 	/** Other versions of this question, testing the same idea with a different look. */
 	variants?: Question[];
+	/** Smaller questions that walk up to this one, each marked on the device. */
+	steps?: Question[];
 }
 
 /** One spoke of the skill radar. */
@@ -102,6 +104,8 @@ export interface ExamItem {
 	q: Question;
 	/** When `q` is a variant, the id of the question it stands in for. */
 	of?: string;
+	/** Walk through `q.steps` before the problem itself. */
+	guided?: boolean;
 }
 
 /**
@@ -147,6 +151,8 @@ export interface Attempt {
 	recalled?: string;
 	/** When a variant was asked in place of the question, its id; `questionId` stays the original's. */
 	variant?: string;
+	/** True when this is a second try, given after Claude's nudge. */
+	nudged?: boolean;
 }
 
 export interface SessionSummary {

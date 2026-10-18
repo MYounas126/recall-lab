@@ -14,6 +14,51 @@ export interface MarkResult {
 	feedback: string;
 	missing: string[];
 	improve?: string;
+	/** When not correct: a question that steers toward what was missed without giving it away. */
+	nudge?: string;
+}
+
+/** A second try can earn at most this share of the marks: the nudge did part of the work. */
+export const SECOND_TRY_CAP = 0.75;
+
+/**
+ * The mark for an answer given again after a nudge. It keeps the better of
+ * the first score and the capped second, and is never "correct": an answer
+ * that needed a nudge is partly known, which schedules it to come back soon.
+ */
+export function combineTries(first: MarkResult, second: MarkResult): MarkResult {
+	const score = Math.max(first.score, Math.round(second.score * SECOND_TRY_CAP));
+	return {
+		score,
+		verdict: score >= 40 ? "partial" : "incorrect",
+		feedback: `Second try: ${second.feedback}`.trim(),
+		missing: second.missing,
+		improve: second.improve,
+	};
+}
+
+/** The prompt that marks one written answer. Pure, so it can be tested. */
+export function markPrompt(q: Question, answer: string, image: boolean, strictness: Strictness): string {
+	return [
+		"You are marking one exam answer. Reply with ONLY a JSON object, no prose and no code fence.",
+		"",
+		STRICTNESS[strictness],
+		"Score as the share of rubric points genuinely made, then subtract for anything stated that is",
+		"WRONG rather than merely absent — a confident false claim costs more than an omission.",
+		"",
+		`QUESTION: ${q.prompt}`,
+		q.code ? `CODE SHOWN:\n${q.code}` : "",
+		`MODEL ANSWER: ${q.expected ?? "(none given)"}`,
+		`RUBRIC (each point must be made):\n${(q.rubric ?? []).map((r, i) => `${i + 1}. ${r}`).join("\n")}`,
+		"",
+		`THE LEARNER'S ANSWER:\n${answer || "(left blank)"}`,
+		image ? "\n(The learner also attached a screenshot. Judge the written answer on its own; say in the feedback that you could not see the image.)" : "",
+		"",
+		'Reply exactly: {"score":<0-100>,"verdict":"correct"|"partial"|"incorrect","feedback":"<1-2 sentences addressed to the learner, naming exactly what was wrong>","missing":["<rubric points not made, verbatim>"],"improve":"<one concrete sentence on what to study>","nudge":"<see below>"}',
+		'verdict is "correct" at 90+, "partial" 40-89, "incorrect" below 40.',
+		'"nudge": if the verdict is not "correct", ONE short question that steers the learner toward the most important',
+		"missed point WITHOUT stating it, so they can try again; empty if correct.",
+	].filter(Boolean).join("\n");
 }
 
 const STRICTNESS: Record<Strictness, string> = {
@@ -40,34 +85,18 @@ export class Tasks {
 	// ---------------------------------------------------------------- marking
 
 	async markAnswer(q: Question, answer: string, image?: string): Promise<MarkResult | { error: string }> {
-		const prompt = [
-			"You are marking one exam answer. Reply with ONLY a JSON object, no prose and no code fence.",
-			"",
-			STRICTNESS[this.strictness()],
-			"Score as the share of rubric points genuinely made, then subtract for anything stated that is",
-			"WRONG rather than merely absent — a confident false claim costs more than an omission.",
-			"",
-			`QUESTION: ${q.prompt}`,
-			q.code ? `CODE SHOWN:\n${q.code}` : "",
-			`MODEL ANSWER: ${q.expected ?? "(none given)"}`,
-			`RUBRIC (each point must be made):\n${(q.rubric ?? []).map((r, i) => `${i + 1}. ${r}`).join("\n")}`,
-			"",
-			`THE LEARNER'S ANSWER:\n${answer || "(left blank)"}`,
-			image ? "\n(The learner also attached a screenshot. Judge the written answer on its own; say in the feedback that you could not see the image.)" : "",
-			"",
-			'Reply exactly: {"score":<0-100>,"verdict":"correct"|"partial"|"incorrect","feedback":"<1-2 sentences addressed to the learner, naming exactly what was wrong>","missing":["<rubric points not made, verbatim>"],"improve":"<one concrete sentence on what to study>"}',
-			'verdict is "correct" at 90+, "partial" 40-89, "incorrect" below 40.',
-		].filter(Boolean).join("\n");
-
-		const res = await this.cli.askJson<MarkResult>(prompt, 120000);
+		const res = await this.cli.askJson<MarkResult>(markPrompt(q, answer, Boolean(image), this.strictness()), 120000);
 		if (!res.ok) return { error: res.error };
 		const d = res.data;
+		const verdict = d.verdict === "correct" || d.verdict === "partial" ? d.verdict : "incorrect";
+		const nudge = verdict !== "correct" && d.nudge ? String(d.nudge).trim() : "";
 		return {
 			score: clamp(d.score),
-			verdict: d.verdict === "correct" || d.verdict === "partial" ? d.verdict : "incorrect",
+			verdict,
 			feedback: String(d.feedback ?? ""),
 			missing: Array.isArray(d.missing) ? d.missing.map(String) : [],
 			improve: d.improve ? String(d.improve) : undefined,
+			...(nudge ? { nudge } : {}),
 		};
 	}
 
@@ -226,26 +255,75 @@ export class Tasks {
 
 	// --------------------------------------------------------------- variants
 
-	/**
-	 * Writes variants for some of a bank's questions and saves them into the
-	 * bank file. The file is read again just before the write, so an edit made
-	 * while Claude was working is kept, and a question that changed meanwhile
-	 * (the quiz rebuilt, say) gets nothing: Claude's variants are of the
-	 * question as it was. Returns how many variants were added.
-	 */
+	/** Writes variants for some of a bank's questions into the bank file. Returns how many were added. */
 	async generateVariants(bank: Bank, path: string, ids: string[], perQuestion = 2): Promise<number | { error: string }> {
 		const targets = bank.questions.filter((q) => ids.includes(q.id));
 		if (!targets.length) return 0;
-		const note = bank.note ? this.app.vault.getAbstractFileByPath(bank.note) : null;
-		const content = note instanceof TFile ? await this.app.vault.cachedRead(note) : "";
-		const title = note instanceof TFile ? note.basename : bank.title;
-
+		const { title, content } = await this.noteOf(bank);
 		const res = await this.cli.askJson<{ variants?: Record<string, Question[]> }>(
 			variantPrompt(title, content, targets, perQuestion),
 			300000
 		);
 		if (!res.ok) return { error: res.error };
+		return this.mergeIntoBank(path, targets, res.data?.variants, {
+			field: "variants",
+			label: "variants",
+			check: checkVariant,
+			// New variants join the ones already there.
+			id: (parent, n) => `${parent.id}~v${(parent.variants?.length ?? 0) + n + 1}`,
+			replace: false,
+		});
+	}
 
+	/** Writes guided steps for some of a bank's problems into the bank file. Returns how many problems got steps. */
+	async generateSteps(bank: Bank, path: string, ids: string[]): Promise<number | { error: string }> {
+		const targets = bank.questions.filter((q) => ids.includes(q.id));
+		if (!targets.length) return 0;
+		const { title, content } = await this.noteOf(bank);
+		const res = await this.cli.askJson<{ steps?: Record<string, Question[]> }>(stepsPrompt(title, content, targets), 300000);
+		if (!res.ok) return { error: res.error };
+		const added = await this.mergeIntoBank(path, targets, res.data?.steps, {
+			field: "steps",
+			label: "steps",
+			check: checkStep,
+			id: (parent, n) => `${parent.id}~s${n + 1}`,
+			// A fresh set replaces an old one: steps only make sense as a whole.
+			replace: true,
+			minimum: 2,
+		});
+		return added;
+	}
+
+	/** A bank's note, for the prompts that need its content. */
+	private async noteOf(bank: Bank): Promise<{ title: string; content: string }> {
+		const note = bank.note ? this.app.vault.getAbstractFileByPath(bank.note) : null;
+		if (!(note instanceof TFile)) return { title: bank.title, content: "" };
+		return { title: note.basename, content: await this.app.vault.cachedRead(note) };
+	}
+
+	/**
+	 * Saves questions Claude made for some of a bank's questions — variants or
+	 * steps — into the bank file, after checking each. The file is read again
+	 * just before the write, so an edit made while Claude was working is kept,
+	 * and a question that changed meanwhile (the quiz rebuilt, say) gets
+	 * nothing: what Claude made was for the question as it was.
+	 * Returns how many questions were added to (or, for steps, how many parents
+	 * got a set); with nothing usable it writes nothing and says why.
+	 */
+	private async mergeIntoBank(
+		path: string,
+		targets: Question[],
+		made: Record<string, Question[]> | undefined,
+		how: {
+			field: "variants" | "steps";
+			label: string;
+			check: (parent: Question, q: Question) => string | null;
+			id: (parent: Question, n: number) => string;
+			replace: boolean;
+			/** Fewer usable than this, and a parent gets none. */
+			minimum?: number;
+		}
+	): Promise<number | { error: string }> {
 		const file = this.app.vault.getAbstractFileByPath(path);
 		if (!(file instanceof TFile)) return { error: `${path} is gone.` };
 		let fresh: Bank;
@@ -259,29 +337,30 @@ export class Tasks {
 		let added = 0;
 		const rejected: string[] = [];
 		for (const target of targets) {
-			const q = fresh.questions.find((x) => x.id === target.id);
-			const raw = res.data?.variants?.[target.id];
-			if (!q || !Array.isArray(raw)) continue;
-			if (contentId(q) !== contentId(target)) {
-				rejected.push(`${q.id}: the question changed while its variants were written`);
+			const parent = fresh.questions.find((x) => x.id === target.id);
+			const raw = made?.[target.id];
+			if (!parent || !Array.isArray(raw)) continue;
+			if (contentId(parent) !== contentId(target)) {
+				rejected.push(`${parent.id}: the question changed while its ${how.label} were written`);
 				continue;
 			}
-			const kept = q.variants ?? [];
-			for (const v of raw) {
-				const problem = checkVariant(q, v);
+			const kept: Question[] = [];
+			for (const q of raw) {
+				const problem = how.check(parent, q);
 				if (problem) {
-					rejected.push(`${q.id}: ${problem}`);
+					rejected.push(`${parent.id}: ${problem}`);
 					continue;
 				}
-				v.id = `${q.id}~v${kept.length + 1}`;
-				kept.push(v);
-				added += 1;
+				q.id = how.id(parent, kept.length);
+				kept.push(q);
 			}
-			if (kept.length) q.variants = kept;
+			if (kept.length < (how.minimum ?? 1)) continue;
+			parent[how.field] = how.replace ? kept : [...(parent[how.field] ?? []), ...kept];
+			added += how.replace ? 1 : kept.length;
 		}
-		if (rejected.length) console.warn(`Recall Lab: dropped ${rejected.length} variants:`, rejected);
+		if (rejected.length) console.warn(`Recall Lab: dropped ${rejected.length} ${how.label}:`, rejected);
 		if (!added) {
-			return { error: `None of Claude's variants were usable${rejected.length ? `: ${rejected.slice(0, 3).join("; ")}` : ""}.` };
+			return { error: `None of Claude's ${how.label} were usable${rejected.length ? `: ${rejected.slice(0, 3).join("; ")}` : ""}.` };
 		}
 		await this.writeFile(path, JSON.stringify(fresh, null, 2) + "\n");
 		return added;
@@ -586,22 +665,80 @@ export function checkVariant(original: Question, v: Question): string | null {
 	if (original.ref) v.ref = original.ref;
 	if (!v.explain) v.explain = "";
 	delete v.variants;
-	if (v.type === "mcq") {
-		if (!Array.isArray(v.choices) || v.choices.length < 2) return "has no options";
-		if (typeof v.answer !== "number" || v.answer < 0 || v.answer >= v.choices.length) return "has no valid answer index";
-		const fixed = reconcileAnswer(v);
-		if (fixed !== null) v.answer = fixed;
+	return checkFields(v);
+}
+
+/**
+ * Checks the fields a question's type needs, fixing what can be fixed: an
+ * mcq answer index that its explanation contradicts, a select-all set with
+ * indices out of range, a written answer with no rubric.
+ */
+export function checkFields(q: Question): string | null {
+	if (q.type === "mcq") {
+		if (!Array.isArray(q.choices) || q.choices.length < 2) return "has no options";
+		if (typeof q.answer !== "number" || q.answer < 0 || q.answer >= q.choices.length) return "has no valid answer index";
+		const fixed = reconcileAnswer(q);
+		if (fixed !== null) q.answer = fixed;
 	}
-	if (v.type === "multi") {
-		if (!Array.isArray(v.choices) || !Array.isArray(v.answer)) return "has no answer set";
-		v.answer = (v.answer as number[]).filter((n) => n >= 0 && n < v.choices!.length);
-		if (!v.answer.length) return "has no answer set";
+	if (q.type === "multi") {
+		if (!Array.isArray(q.choices) || !Array.isArray(q.answer)) return "has no answer set";
+		q.answer = (q.answer as number[]).filter((n) => n >= 0 && n < q.choices!.length);
+		if (!q.answer.length) return "has no answer set";
 	}
-	if (v.type === "short" || v.type === "command" || v.type === "image") {
-		if (!v.expected) return "has no model answer";
-		if (!v.rubric?.length) v.rubric = [v.expected];
+	if (q.type === "short" || q.type === "command" || q.type === "image") {
+		if (!q.expected) return "has no model answer";
+		if (!q.rubric?.length) q.rubric = [q.expected];
 	}
-	return checkInteractive(v);
+	return checkInteractive(q);
+}
+
+/** Types a guided step may use: ones marked on the device, so each step is checked at once. */
+const STEP_TYPES: readonly QuestionType[] = ["mcq", "multi", "cloze", "order", "match", "hotspot", "trace"];
+
+/**
+ * Checks one guided step. Steps are marked on the device, so only offline
+ * types are allowed; they inherit the problem's topic, axis and ref.
+ */
+export function checkStep(problem: Question, s: Question): string | null {
+	if (!s || typeof s !== "object") return "is not a question";
+	if (!STEP_TYPES.includes(s.type)) return `is a ${s.type} question, which cannot be checked at once`;
+	if (!s.prompt?.trim()) return "has no prompt";
+	s.tier = "easy";
+	s.topic = problem.topic;
+	if (problem.axis) s.axis = problem.axis;
+	if (problem.ref) s.ref = problem.ref;
+	if (!s.explain) s.explain = "";
+	delete s.variants;
+	delete s.steps;
+	return checkFields(s);
+}
+
+/** The prompt that breaks brutal problems into guided steps. Pure, so it can be tested. */
+export function stepsPrompt(title: string, content: string, problems: Question[]): string {
+	return [
+		"Break each problem below into 3 to 5 smaller STEPS that walk a learner up to solving it. Reply with ONLY",
+		"a JSON object, no prose and no fence.",
+		"",
+		"Each step is one small question whose answer is a piece the full problem needs, in the order you would",
+		"work it out. Together they must not simply hand over the final answer: the learner still has to put",
+		"the pieces together afterwards, unaided.",
+		"",
+		"RULES",
+		`- Every step must be one of these types, which are marked instantly: ${STEP_TYPES.join(", ")}.`,
+		"  Give each every field its type needs (choices and a 0-based answer for mcq, {{blanks}} for cloze, ...).",
+		"- Every fact must come from the note.",
+		"",
+		'SHAPE: {"steps":{"<problem id>":[{"type":"mcq","prompt":"...","choices":["..."],"answer":0,"explain":"..."}]}}',
+		"",
+		"PROBLEMS:",
+		JSON.stringify(problems.map(({ variants: _v, steps: _s, ...q }) => q), null, 1),
+		"",
+		`NOTE TITLE: ${title}`,
+		"NOTE CONTENT:",
+		"---",
+		content,
+		"---",
+	].join("\n");
 }
 
 /** The exact prompt the plugin sends for a bank. Pure, so it can be tested. */
