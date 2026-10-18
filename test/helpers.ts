@@ -85,10 +85,18 @@ export class MockEl {
 
 	createSvg(tag: string, o?: { cls?: string | string[]; attr?: Record<string, unknown> }): MockEl {
 		const e = new MockEl(tag);
-		if (o?.cls) e.cls.push(...(Array.isArray(o.cls) ? o.cls : o.cls.split(" ")));
+		// As in Obsidian: SVG classes go through classList.add, one token each.
+		if (o?.cls) e.addClass(...(Array.isArray(o.cls) ? o.cls : [o.cls]));
 		for (const [k, v] of Object.entries(o?.attr ?? {})) e.attrs[k] = String(v);
 		this.children.push(e);
 		return e;
+	}
+
+	addClass(...tokens: string[]): void {
+		for (const t of tokens) {
+			if (/\s/.test(t)) throw new Error(`InvalidCharacterError: the token ('${t}') contains HTML space characters`);
+			this.cls.push(t);
+		}
 	}
 
 	/** Every element below this one, depth first. */
