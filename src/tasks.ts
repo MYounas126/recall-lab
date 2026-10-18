@@ -5,7 +5,7 @@ import { Attempt, Bank, BlurtResult, Course, Diagnosis, Lab, Question, QuestionT
 import type { Leech } from "./leeches";
 import { Section, blurtPrompt, headingsOf, parseBlurt, sectionsOf } from "./blurt";
 import { parseStudent, parseTeachScore, studentPrompt, teachScorePrompt } from "./teach";
-import { hashFlag, nudges, validateLab, detectToolchain, describeToolchain } from "./labs";
+import { hashFlag, leaksFlag, nudges, validateLab, detectToolchain, describeToolchain } from "./labs";
 import type { Strictness } from "./settings";
 import { hashText } from "./util";
 import { answeredTo, plain } from "./answers";
@@ -315,33 +315,47 @@ export class Tasks {
 	// ------------------------------------------------------------- lab hints
 
 	/**
-	 * Rewrites labs' hints as CTF nudges, in one request, and saves them into
-	 * each lab's file. Only nudges are kept; a lab that gets none keeps its
-	 * old hints. Progress is untouched. Returns how many labs were rewritten.
+	 * Rewrites labs' hints as CTF nudges and saves them into each lab's file,
+	 * a few labs per request so a large vault stays within one prompt's reach.
+	 * A lab is rewritten only with a full set of nudges that do not give its
+	 * flag away; otherwise it keeps its old hints. Returns, per rewritten lab,
+	 * how many hints it now has.
 	 */
-	async rewriteHints(labs: Lab[]): Promise<number | { error: string }> {
-		if (!labs.length) return 0;
-		const res = await this.cli.askJson<{ hints?: Record<string, unknown> }>(hintsPrompt(labs), 240000);
-		if (!res.ok) return { error: res.error };
-		let done = 0;
-		for (const lab of labs) {
-			const hints = nudges(res.data?.hints?.[lab.id]);
-			if (!hints.length) continue;
-			const path = normalizePath(`${this.labsFolder()}/${lab.id}.json`);
-			const file = this.app.vault.getAbstractFileByPath(path);
-			if (!(file instanceof TFile)) continue;
-			// Read again just before the write, so nothing else in the file is lost.
-			let fresh: Lab;
-			try {
-				fresh = JSON.parse(await this.app.vault.read(file)) as Lab;
-			} catch {
+	async rewriteHints(labs: Lab[]): Promise<Record<string, number> | { error: string }> {
+		const done: Record<string, number> = {};
+		let failure = "";
+		for (let i = 0; i < labs.length; i += HINT_BATCH) {
+			const batch = labs.slice(i, i + HINT_BATCH);
+			const res = await this.cli.askJson<{ hints?: Record<string, unknown> }>(hintsPrompt(batch), 240000);
+			if (!res.ok) {
+				failure = res.error;
 				continue;
 			}
-			fresh.hints = hints;
-			await this.writeFile(path, JSON.stringify(fresh, null, 2) + "\n");
-			done += 1;
+			for (const lab of batch) {
+				const hints = nudges(res.data?.hints?.[lab.id]).filter((h) => !leaksFlag(lab, h));
+				// A partial set would leave hints already revealed, and paid
+				// for, with nothing to show.
+				if (hints.length < Math.min(3, lab.hints.length)) continue;
+				const path = normalizePath(`${this.labsFolder()}/${lab.id}.json`);
+				const file = this.app.vault.getAbstractFileByPath(path);
+				if (!(file instanceof TFile)) continue;
+				// Read again just before the write, so nothing else in the file is
+				// lost, and skip a lab rebuilt under the same id meanwhile.
+				let fresh: Lab;
+				try {
+					fresh = JSON.parse(await this.app.vault.read(file)) as Lab;
+				} catch {
+					continue;
+				}
+				if (fresh.flagHash !== lab.flagHash) continue;
+				fresh.hints = hints;
+				await this.writeFile(path, JSON.stringify(fresh, null, 2) + "\n");
+				done[lab.id] = hints.length;
+			}
 		}
-		if (!done) return { error: "None of the hints Claude wrote were short enough to use." };
+		if (!Object.keys(done).length) {
+			return { error: failure || "None of the hints Claude wrote were short enough to use." };
+		}
 		return done;
 	}
 
@@ -652,6 +666,9 @@ export function labPrompt(
 		"---",
 	].join("\n");
 }
+
+/** Labs per hint-rewrite request: each carries its whole source and solution. */
+const HINT_BATCH = 4;
 
 /** How lab hints are written: CTF nudges, the way HackTheBox words them. */
 const HINT_RULES = [

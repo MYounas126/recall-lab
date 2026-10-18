@@ -709,17 +709,22 @@ export default class RecallLabPlugin extends Plugin {
 	 * Offers to rewrite the hints of labs written before hints were nudges:
 	 * theirs walk through the solution, the last one all but giving it away.
 	 */
-	async offerHintRewrite(): Promise<void> {
-		const labs = (await this.labs.list()).filter(hintsNeedShortening);
+	async offerHintRewrite(only?: Lab): Promise<void> {
+		// Hints of a lab already solved or given up no longer matter.
+		const progress = (await this.store.readProgress()).labs ?? {};
+		const open = (l: Lab) => !progress[l.id]?.solvedAt && !progress[l.id]?.gaveUpAt;
+		const labs = only ? [only] : (await this.labs.list()).filter((l) => hintsNeedShortening(l) && open(l));
 		if (!labs.length) {
-			new Notice("Every lab's hints are already short nudges.");
+			new Notice("Every open lab's hints are already short nudges.");
 			return;
 		}
+		const requests = Math.ceil(labs.length / 4);
 		new ConfirmModal(
 			this.app,
-			`Shorten the hints of ${labs.length} lab${labs.length === 1 ? "" : "s"}?`,
-			"Claude rewrites them as CTF-style nudges of a few words, all in one request. Hints you have already " +
-				"revealed stay revealed, and nothing else in your progress changes. This uses your Claude plan.",
+			only ? `Shorten the hints of "${only.title}"?` : `Shorten the hints of ${labs.length} lab${labs.length === 1 ? "" : "s"}?`,
+			`Claude rewrites them as three CTF-style nudges of a few words (${requests} request${requests === 1 ? "" : "s"}). ` +
+				"Hints you have already revealed stay revealed, in their new wording, and nothing else in your progress " +
+				"changes. This uses your Claude plan.",
 			"Shorten hints",
 			() => void this.rewriteHints(labs)
 		).open();
@@ -736,14 +741,21 @@ export default class RecallLabPlugin extends Plugin {
 			}
 		});
 		if (res === null) return;
-		if (typeof res !== "number") {
+		if ("error" in res) {
 			this.log.error("shortening lab hints failed", { error: res.error });
 			new Notice(`Could not shorten the hints: ${res.error}`, 12000);
 			return;
 		}
-		this.log.info("lab hints shortened", { labs: res });
-		new Notice(`Shortened the hints of ${res} lab${res === 1 ? "" : "s"}.`, 8000);
-		await this.refreshView();
+		// A lab can now have fewer hints than it had revealed; charge only for
+		// hints that still exist.
+		for (const [id, count] of Object.entries(res)) {
+			const p = await this.store.labProgress(id);
+			if (p.hintsUsed > count) await this.store.saveLabProgress({ ...p, hintsUsed: count });
+		}
+		const n = Object.keys(res).length;
+		this.log.info("lab hints shortened", { labs: n });
+		new Notice(`Shortened the hints of ${n} lab${n === 1 ? "" : "s"}${n < labs.length ? ` (${labs.length - n} kept their old hints)` : ""}.`, 8000);
+		await this.openView()?.labsChanged(Object.keys(res));
 	}
 
 	/**

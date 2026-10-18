@@ -160,10 +160,12 @@ each time, so it cannot drift out of step with your answer history.
   course view shows an estimate, asks first, and can be stopped at any point.
 - **Labs.** *Labs* beside a note that has a quiz writes three CTF-style
   challenges — one source file each, solvable by reading. Only a SHA-256 hash
-  of each flag is kept. Hints read like a CTF's: three nudges of a few words
-  ("Mind the register width."), never a step or a value, each costing 15% of
-  the lab's score. Labs written before this have step-by-step hints; **Shorten
-  lab hints to CTF-style nudges** rewrites them in one Claude request.
+  of each flag is kept. Hints read like a CTF's: Claude is asked for three
+  nudges of a few words ("Mind the register width."), and one that is long,
+  quotes a long value or the flag is dropped. Each costs 15% of the lab's
+  score. Labs written before this have step-by-step hints; **Shorten lab hints
+  to CTF-style nudges** rewrites those of your open labs (a few labs per Claude
+  request), and a lab's own page offers to shorten just its hints.
 
 Builds run one at a time. Anything you ask for while one is running is queued
 behind it, and asking twice for the same note does not build it twice.

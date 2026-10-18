@@ -200,6 +200,16 @@ export class RecallLabView extends ItemView {
 		await this.render();
 	}
 
+	/**
+	 * Labs were rewritten on disk. The lab page is "occupied", so a plain
+	 * rerender skips it; when it shows one of these labs it is redrawn anyway,
+	 * from the new file, or the old hints would stay on screen.
+	 */
+	async labsChanged(ids: string[]): Promise<void> {
+		if (this.screen === "lab" && this.openLab && ids.includes(this.openLab.id)) await this.render();
+		else await this.rerender();
+	}
+
 	/** Jumps to the folder view for a note and highlights its row. */
 	async revealNote(path: string): Promise<void> {
 		await this.refresh();
@@ -227,6 +237,8 @@ export class RecallLabView extends ItemView {
 		this.banks = await this.plugin.store.listBanks();
 		this.courses = await this.plugin.store.listCourses();
 		this.allLabs = await this.plugin.labs.list();
+		// The open lab follows its file: a lab rewritten on disk shows as rewritten.
+		if (this.openLab) this.openLab = this.allLabs.find((l) => l.id === this.openLab!.id) ?? this.openLab;
 		this.highlightBanks = this.plugin.settings.highlightClozes
 			? await this.plugin.store.listHighlightBanks(this.courses)
 			: [];
@@ -2333,7 +2345,7 @@ export class RecallLabView extends ItemView {
 				const old = hintPanel.createDiv({ cls: "rl-muted" });
 				old.appendText("These hints were written as full steps, not CTF-style nudges. ");
 				const fix = old.createEl("a", { cls: "rl-link", text: "Shorten them (uses Claude)" });
-				fix.onclick = (e) => { e.preventDefault(); void this.plugin.offerHintRewrite(); };
+				fix.onclick = (e) => { e.preventDefault(); void this.plugin.offerHintRewrite(lab); };
 			}
 			for (let i = 0; i < Math.min(prog.hintsUsed, lab.hints.length); i++) {
 				const h = hintPanel.createDiv({ cls: "rl-hint-shown" });
