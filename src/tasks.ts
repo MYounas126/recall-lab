@@ -3,7 +3,7 @@ import { ClaudeCli } from "./claude";
 import { Store } from "./store";
 import { Attempt, Bank, BlurtResult, Course, Diagnosis, Lab, Question, QuestionType, Verdict } from "./types";
 import type { Leech } from "./leeches";
-import { blurtPrompt, headingsOf, parseBlurt } from "./blurt";
+import { blurtPrompt, headingsOf, parseBlurt, sectionsOf } from "./blurt";
 import { hashFlag, validateLab, detectToolchain, describeToolchain } from "./labs";
 import type { Strictness } from "./settings";
 import { hashText } from "./util";
@@ -253,10 +253,16 @@ export class Tasks {
 		const note = this.app.vault.getAbstractFileByPath(notePath);
 		if (!(note instanceof TFile)) return { error: `${notePath} is not a note.` };
 		const content = await this.app.vault.cachedRead(note);
+		// Obsidian's own reading of the headings where it has one.
+		const cached = this.app.metadataCache?.getFileCache(note)?.headings;
+		const headings = cached?.length ? cached.map((h) => ({ text: h.heading, level: h.level })) : headingsOf(content);
+		const sections = sectionsOf(headings);
 		// A note with no headings is one section, named after the note.
-		const sections = headingsOf(content);
-		if (!sections.length) sections.push(note.basename);
-		const res = await this.cli.askJson<unknown>(blurtPrompt(note.basename, content, written, sections), 180000);
+		if (!sections.length) sections.push({ name: note.basename, link: "" });
+		const res = await this.cli.askJson<unknown>(
+			blurtPrompt(note.basename, content, written, sections.map((s) => s.name)),
+			180000
+		);
 		if (!res.ok) return { error: res.error };
 		const result = parseBlurt(res.data, sections, notePath, new Date());
 		return typeof result === "string" ? { error: `Claude's comparison was not usable: ${result}.` } : result;

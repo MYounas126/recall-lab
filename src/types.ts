@@ -201,8 +201,11 @@ export interface BlurtResult {
 	feedback: string;
 	/** Headings of the sections whose main idea you wrote down. */
 	covered: string[];
-	/** Sections you left out, each with its main point. */
-	missed: { heading: string; point: string }[];
+	/**
+	 * Sections you left out, each with its main point and where it is in the
+	 * note, as a heading link (absent on results from before it was kept).
+	 */
+	missed: { heading: string; point: string; link?: string }[];
 }
 
 /** How one finished day went. */

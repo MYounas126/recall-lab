@@ -22,7 +22,7 @@ import { needingVariants, withVariants } from "./variants";
 import { findLeeches } from "./leeches";
 import { needingSteps, needsGuidance } from "./guided";
 import { SECOND_TRY_CAP, combineTries } from "./tasks";
-import { blurtExam } from "./blurt";
+import { blurtExam, missedHeading } from "./blurt";
 import { checkFlag } from "./labs";
 import { INSTALL_HINT } from "./claude";
 
@@ -35,6 +35,15 @@ const USD_PER_QUIZ = 0.13;
 export const VIEW_TYPE_RECALL = "recall-lab-view";
 
 type Screen = "home" | "folder" | "exam" | "results" | "history" | "lab" | "clinic" | "blurt";
+
+/** A write-it-down page: what is written so far, its deadline, and Claude's comparison once it is in. */
+interface BlurtPage {
+	path: string;
+	text: string;
+	/** When the suggested time runs out, in ms. */
+	ends: number;
+	result: BlurtResult | null;
+}
 
 
 interface LiveAnswer {
@@ -72,7 +81,7 @@ export class RecallLabView extends ItemView {
 	/** The leech clinic's question on screen, by key. */
 	private clinicKey: string | null = null;
 	/** The note being written down from memory; its result once compared. */
-	private blurt: { path: string; text: string; result: BlurtResult | null } | null = null;
+	private blurt: BlurtPage | null = null;
 	/** The write-it-down countdown, while it runs. */
 	private blurtClock: number | null = null;
 	/** Which guided step of the question on screen is showing. */
@@ -448,15 +457,21 @@ export class RecallLabView extends ItemView {
 		}
 	}
 
-	/** Write it all down: a timed page for everything you remember about a note, before its quiz. */
+	/**
+	 * Write it all down: a timed page for everything you remember about a
+	 * note, before its quiz. A page left unfinished for the same note is
+	 * picked up again, with its writing and its clock, rather than wiped.
+	 */
 	async startBlurt(path: string): Promise<void> {
 		await this.refresh();
-		this.blurt = { path, text: "", result: null };
+		if (this.blurt?.path !== path || this.blurt.result) {
+			this.blurt = { path, text: "", result: null, ends: Date.now() + this.plugin.settings.blurtMinutes * 60_000 };
+		}
 		this.screen = "blurt";
 		await this.render();
 	}
 
-	private async renderBlurt(main: HTMLElement, blurt: { path: string; text: string; result: BlurtResult | null }): Promise<void> {
+	private async renderBlurt(main: HTMLElement, blurt: BlurtPage): Promise<void> {
 		const name = blurt.path.split("/").pop()!.replace(/\.md$/, "");
 		const head = main.createDiv({ cls: "rl-head" });
 		const back = head.createEl("a", { cls: "rl-link", text: "← back" });
@@ -481,15 +496,22 @@ export class RecallLabView extends ItemView {
 		const done = new ButtonComponent(panel.createDiv({ cls: "rl-actions" })).setButtonText(label).setCta();
 
 		// The clock is a guide, not a guillotine: at zero it says so and waits.
-		const ends = Date.now() + this.plugin.settings.blurtMinutes * 60_000;
+		// Its deadline belongs to the page, so a redraw does not restart it,
+		// and only one interval ever runs: an older one is cleared first, and
+		// each clears itself at zero.
+		this.stopBlurtClock();
 		const tick = () => {
-			const left = Math.max(0, Math.ceil((ends - Date.now()) / 1000));
+			const left = Math.max(0, Math.ceil((blurt.ends - Date.now()) / 1000));
 			clock.setText(left ? `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` : "Time's up. Finish your sentence, then press Done.");
 			clock.toggleClass("rl-blurt-over", !left);
-			if (!left) this.stopBlurtClock();
+			if (!left) {
+				window.clearInterval(id);
+				if (this.blurtClock === id) this.blurtClock = null;
+			}
 		};
+		const id = window.setInterval(tick, 1000);
+		this.blurtClock = id;
 		tick();
-		this.blurtClock = window.setInterval(tick, 1000);
 
 		done.onClick(async () => {
 			if (!area.value.trim()) { new Notice("Write down what you remember first."); return; }
@@ -497,7 +519,12 @@ export class RecallLabView extends ItemView {
 			done.setDisabled(true).setButtonText("Claude is comparing it with your note…");
 			area.setAttr("disabled", "true");
 			this.plugin.log.info("checking a write-it-down", { note: blurt.path, chars: area.value.length });
-			const res = await this.plugin.tasks.checkBlurt(blurt.path, area.value);
+			let res: BlurtResult | { error: string };
+			try {
+				res = await this.plugin.tasks.checkBlurt(blurt.path, area.value);
+			} catch (e) {
+				res = { error: String(e) };
+			}
 			if ("error" in res) {
 				this.plugin.log.error("write-it-down check failed", { note: blurt.path, error: res.error });
 				new Notice(`Could not compare it with the note: ${res.error}`, 12000);
@@ -505,10 +532,15 @@ export class RecallLabView extends ItemView {
 				area.removeAttribute("disabled");
 				return;
 			}
-			await this.plugin.store.saveBlurt(res);
-			if (this.screen === "blurt" && this.blurt === blurt) {
-				blurt.result = res;
-				await this.render();
+			// Shown before it is saved: the comparison is paid for, and a save
+			// that fails must not lose it, or leave the page stuck.
+			blurt.result = res;
+			if (this.screen === "blurt" && this.blurt === blurt) await this.render();
+			try {
+				await this.plugin.store.saveBlurt(res);
+			} catch (e) {
+				this.plugin.log.error("could not save a write-it-down", { note: blurt.path, error: String(e) });
+				new Notice(`Recall Lab could not save this comparison: ${String(e)}`, 12000);
 			}
 		});
 		window.setTimeout(() => area.focus(), 0);
@@ -534,7 +566,8 @@ export class RecallLabView extends ItemView {
 			for (const m of r.missed) {
 				const row = panel.createDiv({ cls: "rl-review-row" });
 				const a = row.createEl("a", { cls: "rl-link", text: m.heading });
-				a.onclick = (e) => { e.preventDefault(); void this.app.workspace.openLinkText(`${link}#${m.heading}`, "", false); };
+				const target = m.link === undefined ? m.heading : m.link;
+				a.onclick = (e) => { e.preventDefault(); void this.app.workspace.openLinkText(target ? `${link}#${target}` : link, "", false); };
 				if (m.point) void this.md(m.point, row.createDiv({ cls: "rl-review-fb" }));
 			}
 		}
@@ -561,7 +594,7 @@ export class RecallLabView extends ItemView {
 		const progress = await this.plugin.store.readProgress();
 		const items = Store.itemsOf([bank, ...this.highlightBanks.filter((b) => b.note === bank.note)]);
 		const total = Math.min(this.plugin.settings.defaultLength, items.length);
-		await this.launch(bank, blurtExam(items, new AnswerIndex(progress.attempts), total, r.missed.map((m) => m.heading)));
+		await this.launch(bank, blurtExam(items, new AnswerIndex(progress.attempts), total, r.missed.map(missedHeading)));
 	}
 
 	/** Recent write-it-down checks: how much of each note came back from memory. */
