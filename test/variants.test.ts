@@ -101,6 +101,42 @@ test("generated variants are checked, numbered and merged into the bank file", a
 	assert.equal(saved.questions[1].variants, undefined);
 });
 
+test("a question rebuilt while its variants were written gets none of them", async () => {
+	const vault = makeVault(0);
+	const path = "_quiz/banks/a.json";
+	const asked = question("q1", { prompt: "What does XOR EAX, EAX do?" });
+	const bank: Bank = { id: "a", title: "A", questions: [asked] };
+	vault.files.set(path, JSON.stringify(bank));
+	const cli = {
+		askJson: async () => {
+			// "Rebuild this quiz" ran meanwhile: q1 now asks something else.
+			const rebuilt = { ...bank, questions: [question("q1", { prompt: "Where does a function leave its result?" })] };
+			vault.files.set(path, JSON.stringify(rebuilt));
+			return { ok: true, data: { variants: { q1: [{ type: "mcq", prompt: "XOR again?", choices: ["a", "b"], answer: 0, explain: "" }] } } };
+		},
+	};
+	const tasks = new Tasks({ vault } as never, cli as never, {} as never, () => "normal", () => "_quiz/banks", () => "_quiz/courses");
+	const res = await tasks.generateVariants(bank, path, ["q1"]);
+	assert.ok(typeof res === "object" && /changed/.test(res.error), JSON.stringify(res));
+	assert.equal((JSON.parse(vault.files.get(path)!) as Bank).questions[0].variants, undefined);
+});
+
+test("a bank that cannot be read back is an error, not a throw", async () => {
+	const vault = makeVault(0);
+	const path = "_quiz/banks/a.json";
+	const bank: Bank = { id: "a", title: "A", questions: [question("q1")] };
+	vault.files.set(path, JSON.stringify(bank));
+	const cli = {
+		askJson: async () => {
+			vault.files.set(path, "{ half a file");
+			return { ok: true, data: { variants: { q1: [] } } };
+		},
+	};
+	const tasks = new Tasks({ vault } as never, cli as never, {} as never, () => "normal", () => "_quiz/banks", () => "_quiz/courses");
+	const res = await tasks.generateVariants(bank, path, ["q1"]);
+	assert.ok(typeof res === "object" && /could not be read back/.test(res.error));
+});
+
 test("variants that are all unusable report an error and write nothing", async () => {
 	const vault = makeVault(0);
 	const path = "_quiz/banks/a.json";

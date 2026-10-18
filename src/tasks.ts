@@ -215,7 +215,9 @@ export class Tasks {
 	/**
 	 * Writes variants for some of a bank's questions and saves them into the
 	 * bank file. The file is read again just before the write, so an edit made
-	 * while Claude was working is kept. Returns how many variants were added.
+	 * while Claude was working is kept, and a question that changed meanwhile
+	 * (the quiz rebuilt, say) gets nothing: Claude's variants are of the
+	 * question as it was. Returns how many variants were added.
 	 */
 	async generateVariants(bank: Bank, path: string, ids: string[], perQuestion = 2): Promise<number | { error: string }> {
 		const targets = bank.questions.filter((q) => ids.includes(q.id));
@@ -232,7 +234,13 @@ export class Tasks {
 
 		const file = this.app.vault.getAbstractFileByPath(path);
 		if (!(file instanceof TFile)) return { error: `${path} is gone.` };
-		const fresh = JSON.parse(await this.app.vault.read(file)) as Bank;
+		let fresh: Bank;
+		try {
+			fresh = JSON.parse(await this.app.vault.read(file)) as Bank;
+			if (!Array.isArray(fresh?.questions)) throw new Error("it has no questions");
+		} catch (e) {
+			return { error: `${path} could not be read back (${(e as Error).message}).` };
+		}
 
 		let added = 0;
 		const rejected: string[] = [];
@@ -240,6 +248,10 @@ export class Tasks {
 			const q = fresh.questions.find((x) => x.id === target.id);
 			const raw = res.data?.variants?.[target.id];
 			if (!q || !Array.isArray(raw)) continue;
+			if (contentId(q) !== contentId(target)) {
+				rejected.push(`${q.id}: the question changed while its variants were written`);
+				continue;
+			}
 			const kept = q.variants ?? [];
 			for (const v of raw) {
 				const problem = checkVariant(q, v);

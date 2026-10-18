@@ -616,19 +616,28 @@ export default class RecallLabPlugin extends Plugin {
 	async buildVariants(targets: { bank: Bank; questions: Question[] }[]): Promise<void> {
 		let added = 0;
 		let failed = 0;
+		let elsewhere = 0;
 		for (const { bank, questions } of targets) {
-			const path = this.store.bankPath(bank.id);
-			const res = await this.build(`variants:${bank.id}`, `variants for "${bank.title}"`, async () => {
-				this.log.info("writing variants", { bank: bank.id, questions: questions.length });
-				const notice = new Notice(`Writing variants for "${bank.title}"…`, 0);
-				try {
-					return await this.tasks.generateVariants(bank, path, questions.map((q) => q.id));
-				} finally {
-					notice.hide();
-				}
-			});
-			if (res === null) continue;
-			if (typeof res === "number") {
+			// One quiz going wrong must not stop the rest, or end the run
+			// without saying what happened.
+			let res: number | { error: string } | null;
+			try {
+				const path = this.store.bankPath(bank.id);
+				res = await this.build(`variants:${bank.id}`, `variants for "${bank.title}"`, async () => {
+					this.log.info("writing variants", { bank: bank.id, questions: questions.length });
+					const notice = new Notice(`Writing variants for "${bank.title}"…`, 0);
+					try {
+						return await this.tasks.generateVariants(bank, path, questions.map((q) => q.id));
+					} finally {
+						notice.hide();
+					}
+				});
+			} catch (e) {
+				res = { error: String(e) };
+			}
+			if (res === null) {
+				elsewhere += 1; // already queued, or the plugin is unloading
+			} else if (typeof res === "number") {
 				added += res;
 				this.log.info("variants written", { bank: bank.id, added: res });
 			} else {
@@ -636,10 +645,11 @@ export default class RecallLabPlugin extends Plugin {
 				this.log.error("variants failed", { bank: bank.id, error: res.error });
 			}
 		}
-		new Notice(
-			failed ? `Wrote ${added} variants; ${failed} quiz${failed === 1 ? "" : "zes"} failed (see the log).` : `Wrote ${added} variants.`,
-			8000
-		);
+		if (this.unloaded) return;
+		const parts = [`Wrote ${added} variant${added === 1 ? "" : "s"}`];
+		if (failed) parts.push(`${failed} quiz${failed === 1 ? "" : "zes"} failed (see the log)`);
+		if (elsewhere) parts.push(`${elsewhere} already queued`);
+		new Notice(`${parts.join("; ")}.`, 8000);
 		await this.refreshView();
 	}
 
