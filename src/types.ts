@@ -95,8 +95,11 @@ export interface Attempt {
 	verdict: Verdict;
 	feedback: string;
 	missing: string[];
-	/** "local" = deterministic marking, "ai" = model-graded, "self" = self-reported. */
-	gradedBy: "local" | "ai" | "self";
+	/**
+	 * "local" = deterministic marking, "ai" = model-graded, "self" = self-reported,
+	 * "error" = the marking failed; kept for the record, never scheduled or scored.
+	 */
+	gradedBy: "local" | "ai" | "self" | "error";
 	ms: number;
 }
 

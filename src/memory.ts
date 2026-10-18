@@ -10,9 +10,21 @@ export function keyOf(item: ExamItem): string {
 
 /** The FSRS rating for one answer: a miss is Again, a partial answer Hard, a correct one Good. */
 export function ratingFor(a: Attempt): Grade {
-	if (a.verdict === "incorrect") return Rating.Again;
-	if (a.verdict === "partial") return Rating.Hard;
+	// By score, not verdict: Hard is a passing grade in FSRS, so a mostly-wrong
+	// "partial" (a select-all answer with one right pick in five) must not count
+	// as remembered.
+	if (a.score < 60) return Rating.Again;
+	if (a.score < 90) return Rating.Hard;
 	return Rating.Good;
+}
+
+/**
+ * Answers that say nothing about memory: a marking that failed (Claude could
+ * not be reached) is kept in the log for the record, but never scheduled or
+ * scored as a miss.
+ */
+export function counts(a: Attempt): boolean {
+	return a.gradedBy !== "error";
 }
 
 /**
@@ -48,11 +60,17 @@ export class Memory {
 		const ordered = attempts.slice().sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
 		for (const a of ordered) {
 			const at = Date.parse(a.ts);
-			if (Number.isNaN(at) || at > cutoff) continue;
+			if (Number.isNaN(at) || at > cutoff || !counts(a)) continue;
 			const key = qkey(a.bankId, a.questionId);
 			const when = new Date(at);
 			const card = this.cards.get(key) ?? createEmptyCard<Card>(when);
-			this.cards.set(key, this.scheduler.next(card, when, ratingFor(a)).card);
+			const rating = ratingFor(a);
+			const next = this.scheduler.next(card, when, rating).card;
+			// Without short-term steps, Again waits as long as the post-lapse
+			// stability (4 days after three reviews, 8 after five). A miss should
+			// come back the next day, so cap it there.
+			if (rating === Rating.Again) next.due = new Date(Math.min(next.due.getTime(), at + DAY));
+			this.cards.set(key, next);
 			if (!this.first.has(key)) this.first.set(key, at);
 		}
 	}
@@ -104,11 +122,10 @@ export class Memory {
 	 * counted from local midnight today. Day 0 includes everything overdue.
 	 */
 	forecast(now: Date, days: number, keys: Set<string>): number[] {
-		const start = startOfDay(now).getTime();
 		const out = new Array<number>(days).fill(0);
 		for (const [key, card] of this.cards) {
 			if (!keys.has(key)) continue;
-			const day = Math.max(0, Math.floor((card.due.getTime() - start) / DAY));
+			const day = Math.max(0, dayOffset(card.due, now));
 			if (day < days) out[day] += 1;
 		}
 		return out;
@@ -135,10 +152,30 @@ export function describeWhen(target: Date, now: Date): string {
 	return `on ${target.toLocaleDateString(undefined, { day: "numeric", month: "short" })}`;
 }
 
+/**
+ * How many calendar days `date` is after `now`'s day: 0 today, 1 tomorrow.
+ * Counted in calendar days, not 24-hour blocks, so a 23- or 25-hour day at a
+ * daylight-saving change does not shift what falls on it.
+ */
+export function dayOffset(date: Date, now: Date): number {
+	return Math.round((startOfDay(date).getTime() - startOfDay(now).getTime()) / DAY);
+}
+
 /** Local midnight at the start of `now`'s day. */
 export function startOfDay(now: Date): Date {
 	const d = new Date(now);
 	d.setHours(0, 0, 0, 0);
+	return d;
+}
+
+/**
+ * The last moment of `now`'s day. Reviews count what is due by then, not
+ * this minute: FSRS keeps the time of day of the last answer, so a question
+ * due at 18:00 could otherwise not be cleared in a morning session.
+ */
+export function endOfDay(now: Date): Date {
+	const d = new Date(now);
+	d.setHours(23, 59, 59, 999);
 	return d;
 }
 
@@ -170,7 +207,7 @@ export function planReview(p: {
 }): ReviewPlan {
 	const { items, memory, now } = p;
 	const due = items
-		.filter((it) => memory.isDue(keyOf(it), now))
+		.filter((it) => memory.isDue(keyOf(it), endOfDay(now)))
 		.map((it) => ({ it, r: memory.recall(keyOf(it), now) ?? 0 }))
 		.sort((a, b) => a.r - b.r)
 		.map((e) => e.it);

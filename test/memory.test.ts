@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import { strict as assert } from "node:assert";
 import { Rating } from "ts-fsrs";
-import { Memory, describeWhen, keyOf, keysOf, planReview, ratingFor } from "../src/memory";
+import { Memory, dayOffset, describeWhen, keyOf, keysOf, planReview, ratingFor } from "../src/memory";
+import { AnswerIndex } from "../src/history";
 import { Store } from "../src/store";
 import { qkey, type Bank } from "../src/types";
 import { attempt, question } from "./helpers";
@@ -15,6 +16,55 @@ test("a miss rates Again, a partial answer Hard, a correct one Good", () => {
 	assert.equal(ratingFor(attempt("a", "q1", 0)), Rating.Again);
 	assert.equal(ratingFor(attempt("a", "q1", 60)), Rating.Hard);
 	assert.equal(ratingFor(attempt("a", "q1", 100)), Rating.Good);
+});
+
+test("the rating follows the score: a mostly-wrong 'partial' is a miss", () => {
+	assert.equal(ratingFor(attempt("a", "q1", 20)), Rating.Again, "one right pick in five is not remembered");
+	assert.equal(ratingFor(attempt("a", "q1", 59)), Rating.Again);
+	assert.equal(ratingFor(attempt("a", "q1", 89)), Rating.Hard);
+	assert.equal(ratingFor(attempt("a", "q1", 90)), Rating.Good);
+});
+
+test("a failed marking is never scheduled or scored", () => {
+	const failed = attempt("a", "q1", 0, ago(1), { gradedBy: "error" });
+	const m = memoryOf(failed);
+	assert.ok(!m.has(qkey("a", "q1")), "not a review");
+	assert.equal(m.introducedSince(new Date(0)), 0, "not a new question met");
+	assert.equal(new AnswerIndex([failed]).mastery("a", "q1"), null, "no mastery");
+	const known = memoryOf(...[60, 30, 15, 5].map((d) => attempt("a", "q1", 100, ago(d))), failed);
+	const clean = memoryOf(...[60, 30, 15, 5].map((d) => attempt("a", "q1", 100, ago(d))));
+	assert.equal(known.card(qkey("a", "q1"))!.due.getTime(), clean.card(qkey("a", "q1"))!.due.getTime(), "the schedule is untouched");
+});
+
+test("a miss comes back the next day, however mature the question was", () => {
+	const reviews = [90, 60, 30, 15, 5].map((d) => attempt("a", "q1", 100, ago(d)));
+	const m = memoryOf(...reviews, attempt("a", "q1", 0, ago(0)));
+	const gap = (m.card(qkey("a", "q1"))!.due.getTime() - NOW.getTime()) / DAY;
+	assert.ok(gap <= 1.0001, `back after ${gap.toFixed(2)} days`);
+});
+
+test("a question due later today is in today's review", () => {
+	const yesterdayEvening = new Date(2026, 9, 17, 18, 0).toISOString();
+	const memory = memoryOf(attempt("a", "q1", 0, yesterdayEvening)); // back a day later: 18:00 today
+	const morning = new Date(2026, 9, 18, 8, 0);
+	assert.ok(!memory.isDue(qkey("a", "q1"), morning), "not due this minute");
+	const bank = { id: "a", title: "A", questions: [question("q1")] };
+	const p = planReview({ items: Store.itemsOf([bank]), memory, now: morning, newPerDay: 0, completed: {}, noteOf: () => undefined });
+	assert.deepEqual(p.due.map(keyOf), [qkey("a", "q1")], "but due today, so a morning session clears it");
+});
+
+test("days are counted on the calendar, also across a daylight-saving change", () => {
+	const tz = process.env.TZ;
+	process.env.TZ = "Europe/London"; // clocks go back on Sun 25 Oct 2026: a 25-hour day
+	try {
+		const now = new Date(2026, 9, 24, 12, 0); // Sat noon
+		assert.equal(dayOffset(new Date(2026, 9, 30, 23, 30), now), 6, "Fri 23:30 is 6 days after Sat");
+		assert.equal(dayOffset(new Date(2026, 9, 25, 0, 30), now), 1);
+		assert.equal(dayOffset(new Date(2026, 9, 24, 23, 59), now), 0);
+	} finally {
+		if (tz === undefined) delete process.env.TZ;
+		else process.env.TZ = tz;
+	}
 });
 
 test("a correct answer is spaced out further than a missed one", () => {

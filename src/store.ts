@@ -1,4 +1,4 @@
-import { App, normalizePath, TFile } from "obsidian";
+import { App, Notice, normalizePath, TFile } from "obsidian";
 import {
 	Attempt,
 	Bank,
@@ -129,25 +129,39 @@ export class Store {
 	// ---------- progress ----------
 
 	async readProgress(): Promise<ProgressFile> {
-		const file = this.vault.getAbstractFileByPath(this.progressPath());
-		if (!(file instanceof TFile)) return freshProgress();
 		try {
-			const parsed = JSON.parse(await this.vault.read(file)) as Partial<ProgressFile>;
-			// Every field is carried through, not just the ones read here: a
-			// field dropped on read is erased by the next write. Completed notes
-			// and lab progress were lost exactly that way.
-			return {
-				...parsed,
-				version: 1,
-				attempts: parsed.attempts ?? [],
-				sessions: parsed.sessions ?? [],
-				completed: parsed.completed ?? {},
-				labs: parsed.labs ?? {},
-			};
+			return await this.readStrict();
 		} catch (e) {
-			console.error("Recall Lab: attempts.json is corrupt, starting a fresh log", e);
+			console.error("Recall Lab: attempts.json could not be read; showing an empty log", e);
 			return freshProgress();
 		}
+	}
+
+	/**
+	 * Reads attempts.json, failing loudly when the file exists but cannot be
+	 * parsed. Writes go through this: treating an unreadable file as empty and
+	 * writing that back would wipe the whole history.
+	 */
+	private async readStrict(): Promise<ProgressFile> {
+		const file = this.vault.getAbstractFileByPath(this.progressPath());
+		if (!(file instanceof TFile)) return freshProgress();
+		let parsed: Partial<ProgressFile>;
+		try {
+			parsed = JSON.parse(await this.vault.read(file)) as Partial<ProgressFile>;
+		} catch (e) {
+			throw new Error(`${this.progressPath()} could not be read, so Recall Lab left it untouched instead of overwriting it (${String(e)})`);
+		}
+		// Every field is carried through, not just the ones read here: a field
+		// dropped on read is erased by the next write. Completed notes and lab
+		// progress were lost exactly that way.
+		return {
+			...parsed,
+			version: 1,
+			attempts: parsed.attempts ?? [],
+			sessions: parsed.sessions ?? [],
+			completed: parsed.completed ?? {},
+			labs: parsed.labs ?? {},
+		};
 	}
 
 	private async writeProgress(data: ProgressFile): Promise<void> {
@@ -168,7 +182,13 @@ export class Store {
 	 */
 	private update(change: (data: ProgressFile) => boolean | void): Promise<ProgressFile> {
 		return this.writes.run(async () => {
-			const data = await this.readProgress();
+			let data: ProgressFile;
+			try {
+				data = await this.readStrict();
+			} catch (e) {
+				new Notice(`Recall Lab: ${(e as Error).message}. Your last change was not saved.`, 15000);
+				throw e;
+			}
 			if (change(data) !== false) await this.writeProgress(data);
 			return data;
 		});

@@ -57,6 +57,16 @@ test("an empty read never shares state with the last one", async () => {
 	assert.equal(second.completed?.["leak.md"], undefined);
 });
 
+test("an unreadable attempts.json is never overwritten", async () => {
+	const vault = makeVault(0);
+	const half = JSON.stringify({ version: 1, attempts: [{ ts: "t" }], sessions: [] }).slice(0, 30);
+	vault.files.set(PATH, half); // e.g. cut short by a sync
+	const store = storeOn(vault);
+	await assert.rejects(store.markComplete("Notes/a.md"), /left it untouched/);
+	assert.equal(vault.files.get(PATH), half, "the file is exactly as it was");
+	assert.deepEqual((await store.readProgress()).attempts, [], "reading still works, as an empty log");
+});
+
 test("saveCoaching reports a session that no longer exists", async () => {
 	const store = storeOn(makeVault(0));
 	await store.recordSession(session);

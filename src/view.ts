@@ -6,7 +6,7 @@ import { shuffled } from "./util";
 import { renderRadar, scoreAxes, scoreCourses, weakestTested, untested, AxisScore } from "./radar";
 import { Attempt, Bank, Course, ExamItem, Lab, LabProgress, Question, SessionSummary, Tier, labScore, letterGrade } from "./types";
 import { AnswerIndex } from "./history";
-import { Memory, ReviewPlan, describeWhen, keysOf, planReview } from "./memory";
+import { Memory, ReviewPlan, counts, describeWhen, endOfDay, keysOf, planReview } from "./memory";
 import { checkFlag } from "./labs";
 import { INSTALL_HINT } from "./claude";
 
@@ -297,7 +297,7 @@ export class RecallLabView extends ItemView {
 				.setCta()
 				.onClick(() => void this.startReview(course));
 		} else {
-			const next = memory.nextDue(now, keys);
+			const next = memory.nextDue(endOfDay(now), keys);
 			panel.createDiv({
 				cls: "rl-muted",
 				text: next
@@ -320,7 +320,7 @@ export class RecallLabView extends ItemView {
 		const items = [...plan.due, ...plan.fresh];
 		if (!items.length) {
 			const now = new Date();
-			const next = memory.nextDue(now, keys);
+			const next = memory.nextDue(endOfDay(now), keys);
 			new Notice(next ? `Nothing to review. The next question is due ${describeWhen(next, now)}.` : "Nothing to review yet.");
 			return;
 		}
@@ -752,7 +752,7 @@ export class RecallLabView extends ItemView {
 		if ("error" in marked) {
 			this.plugin.log.error("marking failed", { question: q.id, error: marked.error });
 			live.attempt = this.attemptFrom(item, live.response, 0, "incorrect",
-				`Could not reach Claude to mark this: ${marked.error}`, [q.topic], "local", ms);
+				`Could not reach Claude to mark this: ${marked.error}`, [q.topic], "error", ms);
 		} else {
 			this.plugin.log.info("answer marked", { question: q.id, score: marked.score });
 			live.attempt = this.attemptFrom(item, live.response, marked.score, marked.verdict,
@@ -851,10 +851,12 @@ export class RecallLabView extends ItemView {
 
 	private async finish(): Promise<void> {
 		const graded = this.answers.filter((a) => a.attempt).map((a) => a.attempt!);
-		const meanScore = graded.length ? Math.round(graded.reduce((s, a) => s + a.score, 0) / graded.length) : 0;
+		// A marking that failed says nothing about what you know.
+		const marked = graded.filter(counts);
+		const meanScore = marked.length ? Math.round(marked.reduce((s, a) => s + a.score, 0) / marked.length) : 0;
 
 		const byTopic = new Map<string, number[]>();
-		for (const a of graded) { const l = byTopic.get(a.topic) ?? []; l.push(a.score); byTopic.set(a.topic, l); }
+		for (const a of marked) { const l = byTopic.get(a.topic) ?? []; l.push(a.score); byTopic.set(a.topic, l); }
 		const weakTopics = [...byTopic.entries()]
 			.map(([t, s]) => ({ t, m: s.reduce((x, y) => x + y, 0) / s.length }))
 			.filter((e) => e.m < 80).sort((a, b) => a.m - b.m).map((e) => e.t);
@@ -890,14 +892,19 @@ export class RecallLabView extends ItemView {
 		this.coachingInFlight.add(summary.id);
 		await this.render();
 		try {
-			await this.fetchCoaching(summary, []);
+			await this.fetchCoaching(summary, [], false);
 		} finally {
 			this.coachingInFlight.delete(summary.id);
 		}
 		if (this.screen === "results" && this.sessionId === summary.id) await this.render();
 	}
 
-	private async fetchCoaching(summary: SessionSummary, axes: AxisScore[]): Promise<void> {
+	/**
+	 * Fetches Claude's feedback on a session and keeps it. An exam's automatic
+	 * request keeps a failure as the feedback text; an on-demand one does not,
+	 * so the button stays there to try again.
+	 */
+	private async fetchCoaching(summary: SessionSummary, axes: AxisScore[], keepFailure = true): Promise<void> {
 		const res = await this.plugin.tasks.coachSession({
 			title: summary.bankTitle ?? summary.bankId,
 			meanScore: summary.meanScore,
@@ -911,6 +918,10 @@ export class RecallLabView extends ItemView {
 
 		if (typeof res === "string") this.plugin.log.info("feedback received", { chars: res.length });
 		else this.plugin.log.error("feedback failed", { error: res.error });
+		if (typeof res !== "string" && !keepFailure) {
+			new Notice(`Could not get feedback from Claude: ${res.error}`, 12000);
+			return;
+		}
 		const coaching = typeof res === "string" ? res : `Could not reach Claude for feedback: ${res.error}`;
 		if (!(await this.plugin.store.saveCoaching(summary.id, coaching))) return;
 		if (this.screen === "results" && this.sessionId === summary.id) await this.render();
@@ -1158,13 +1169,14 @@ export class RecallLabView extends ItemView {
 		};
 		const mean = Math.round(progress.sessions.reduce((s, x) => s + x.meanScore, 0) / progress.sessions.length);
 		stat("Sessions", String(progress.sessions.length));
-		stat("Questions answered", String(progress.attempts.length));
+		const marked = progress.attempts.filter(counts);
+		stat("Questions answered", String(marked.length));
 		stat("Mean score", `${mean}%`);
 		stat("Notes completed", String(Object.keys(progress.completed ?? {}).length));
 
 		// Weakest topics across everything.
 		const byTopic = new Map<string, number[]>();
-		for (const a of progress.attempts) { const l = byTopic.get(a.topic) ?? []; l.push(a.score); byTopic.set(a.topic, l); }
+		for (const a of marked) { const l = byTopic.get(a.topic) ?? []; l.push(a.score); byTopic.set(a.topic, l); }
 		const weak = [...byTopic.entries()]
 			.map(([topic, s]) => ({ topic, score: Math.round(s.reduce((x, y) => x + y, 0) / s.length), n: s.length }))
 			.sort((a, b) => a.score - b.score).slice(0, 10);
