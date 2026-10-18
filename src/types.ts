@@ -55,6 +55,8 @@ export interface Question {
 	cloze?: string;
 	/** trace: the values that should hold after each step through `code`. */
 	trace?: TraceStep[];
+	/** Other versions of this question, testing the same idea with a different look. */
+	variants?: Question[];
 }
 
 /** One spoke of the skill radar. */
@@ -98,6 +100,16 @@ export function qkey(bankId: string, questionId: string): string {
 export interface ExamItem {
 	bankId: string;
 	q: Question;
+	/** When `q` is a variant, the id of the question it stands in for. */
+	of?: string;
+}
+
+/**
+ * The id an item is scheduled and recorded under: a variant answers for its
+ * original, so the concept keeps one history however it is asked.
+ */
+export function idOf(item: ExamItem): string {
+	return item.of ?? item.q.id;
 }
 
 export type Verdict = "correct" | "partial" | "incorrect";
@@ -133,6 +145,8 @@ export interface Attempt {
 	 * options were shown straight away.
 	 */
 	recalled?: string;
+	/** When a variant was asked in place of the question, its id; `questionId` stays the original's. */
+	variant?: string;
 }
 
 export interface SessionSummary {

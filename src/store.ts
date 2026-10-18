@@ -53,6 +53,9 @@ export class Store {
 
 	// ---------- banks ----------
 
+	/** Where each bank was read from, by id: a hand-made bank need not be named after its id. */
+	private bankPaths = new Map<string, string>();
+
 	async listBanks(): Promise<Bank[]> {
 		const folder = normalizePath(this.banksFolder());
 		const banks: Bank[] = [];
@@ -60,12 +63,20 @@ export class Store {
 			if (!file.path.startsWith(folder + "/") || file.extension !== "json") continue;
 			try {
 				const bank = JSON.parse(await this.vault.cachedRead(file)) as Bank;
-				if (bank && Array.isArray(bank.questions) && bank.id) banks.push(bank);
+				if (bank && Array.isArray(bank.questions) && bank.id) {
+					banks.push(bank);
+					this.bankPaths.set(bank.id, file.path);
+				}
 			} catch (e) {
 				console.error(`Recall Lab: could not parse bank ${file.path}`, e);
 			}
 		}
 		return banks.sort((a, b) => a.title.localeCompare(b.title));
+	}
+
+	/** The file a bank lives in, as last listed; by default, the one named after its id. */
+	bankPath(bankId: string): string {
+		return this.bankPaths.get(bankId) ?? normalizePath(`${this.banksFolder()}/${bankId}.json`);
 	}
 
 	async listCourses(): Promise<Course[]> {

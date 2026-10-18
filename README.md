@@ -80,6 +80,14 @@ further. Plain *Submit* claims neither. Mistakes you were sure about get their
 own list on the results screen (they stick unusually well once corrected), and
 History shows how often each level of confidence turned out right.
 
+**Variants.** Once you have answered a question right twice running, its look
+(the option's position, the wording) can start carrying the answer. A course
+with such questions offers *Write variants*, as does the command **Write
+variants for mature questions**: Claude writes two versions of each that test
+the same idea dressed differently. It asks first, since it uses your plan.
+Reviews then ask a variant in place of a mature question, rotating through
+them, and the answer still counts toward the original's schedule.
+
 **Memory map.** In reading view, each heading that questions point at gets a
 dot: green when you would expect to score 80% or more on its questions right
 now, amber from 50%, red below, grey when none has been answered. Hover it for
