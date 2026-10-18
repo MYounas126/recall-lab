@@ -73,6 +73,14 @@ back. *Start the quiz* then asks the left-out sections first. History keeps
 your recent results. Leave the page before pressing Done and it waits for you:
 opening the same note's page again picks up your writing and the clock.
 
+**Teach it back.** The speech bubble beside a note, or the command **Teach
+this note back**, has you explain the note to a curious beginner played by
+Claude. It asks one question at a time wherever you were vague or skipped
+something (up to three; Settings → Questions), and stops early once you have
+covered it. Claude then scores how many of the note's key points you conveyed
+anywhere in the conversation, and links the ones you never got to. Each
+student reply is one Claude request, and the score is one more.
+
 **Recall before recognition** (Settings → Questions, or *Recall first* in the
 exam bar) hides the options of multiple-choice and select-all questions until
 you have typed, or just thought of, your answer. Producing an answer builds

@@ -600,6 +600,11 @@
 }
 .rl-blurt-clock.rl-blurt-over { font-size: 1em; color: var(--text-warning); }
 .rl-blurt-text { width: 100%; min-height: 16rem; }
+.rl-teach-chat { display: flex; flex-direction: column; gap: 0.6rem; margin: 0.6rem 0; }
+.rl-teach-turn { padding: 0.5rem 0.8rem; border-radius: 10px; max-width: 85%; }
+.rl-teach-turn p { margin: 0.2rem 0; }
+.rl-teach-you { align-self: flex-end; background: color-mix(in srgb, var(--interactive-accent) 14%, transparent); }
+.rl-teach-student { align-self: flex-start; background: var(--background-secondary); }
 .rl-lesson { padding-left: 1.4rem; }
 .rl-lesson li { margin: 0.4rem 0; }
 .rl-lesson li p { margin: 0; }

@@ -115,6 +115,18 @@ export default class RecallLabPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: "teach-it-back",
+			name: "Teach this note back",
+			checkCallback: (checking) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file || file.extension !== "md") return false;
+				if (checking) return true;
+				void this.activate().then((view) => view.startTeachBack(file.path));
+				return true;
+			},
+		});
+
+		this.addCommand({
 			id: "complete-note",
 			name: "Mark this note complete and build its quiz",
 			checkCallback: (checking) => {
