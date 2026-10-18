@@ -13,6 +13,7 @@ import {
 	TIERS,
 } from "./types";
 import { AnswerIndex } from "./history";
+import { highlightBank } from "./highlights";
 import { SerialQueue, shuffled } from "./util";
 
 /** Reads banks and courses, and persists attempts, sessions and lab progress. */
@@ -120,6 +121,27 @@ export class Store {
 			.map((f) => f.path)
 			.filter((path) => path.startsWith(prefix) && !covered.has(path))
 			.sort();
+	}
+
+	/**
+	 * Fill-in-the-blank questions made from the ==highlights== in every note of
+	 * these courses, one pseudo-bank per note. Kept apart from listBanks so a
+	 * note with only highlights still counts as having no quiz yet.
+	 */
+	async listHighlightBanks(courses: Course[]): Promise<Bank[]> {
+		const out: Bank[] = [];
+		const done = new Set<string>();
+		for (const course of courses) {
+			for (const path of this.notesIn(course.folder)) {
+				if (done.has(path)) continue;
+				done.add(path);
+				const file = this.vault.getAbstractFileByPath(path);
+				if (!(file instanceof TFile)) continue;
+				const bank = highlightBank(path, await this.vault.cachedRead(file));
+				if (bank) out.push(bank);
+			}
+		}
+		return out;
 	}
 
 	async bankForNote(path: string): Promise<Bank | null> {

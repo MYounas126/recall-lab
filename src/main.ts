@@ -246,7 +246,13 @@ export default class RecallLabPlugin extends Plugin {
 	}
 
 	private async buildSnapshot(): Promise<MemorySnapshot> {
-		const [banks, progress] = await Promise.all([this.store.listBanks(), this.store.readProgress()]);
+		const [files, progress, courses] = await Promise.all([
+			this.store.listBanks(),
+			this.store.readProgress(),
+			this.store.listCourses(),
+		]);
+		// Highlight questions point at headings too, so they colour the dots.
+		const banks = this.settings.highlightClozes ? [...files, ...(await this.store.listHighlightBanks(courses))] : files;
 		const retention = this.settings.targetRecall / 100;
 		const memory = new Memory(progress.attempts, retention);
 		const now = new Date();

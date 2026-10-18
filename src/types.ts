@@ -1,7 +1,18 @@
 export type Tier = "easy" | "hard" | "brutal";
 export const TIERS: Tier[] = ["easy", "hard", "brutal"];
 
-export type QuestionType = "mcq" | "multi" | "short" | "command" | "image";
+export type QuestionType =
+	| "mcq" | "multi" | "short" | "command" | "image"
+	| "hotspot" | "trace" | "order" | "match" | "cloze";
+
+/** The types marked instantly on the device, with nothing sent to Claude. */
+export const OFFLINE_TYPES: readonly QuestionType[] = ["mcq", "multi", "hotspot", "trace", "order", "match", "cloze"];
+
+/** One step of a trace: once line `line` of the code has run, these names hold these values. */
+export interface TraceStep {
+	line: number;
+	expect: Record<string, string>;
+}
 
 /** A single question in a bank. */
 export interface Question {
@@ -34,6 +45,16 @@ export interface Question {
 	slide?: number;
 	/** Which course skill axis this question feeds. Falls back to the course's topic map. */
 	axis?: string;
+	/** hotspot: the 1-based lines of `code` that are the answer. */
+	lines?: number[];
+	/** order: the items in their correct order; they are shown shuffled. */
+	items?: string[];
+	/** match: left–right pairs; the right-hand sides are shown shuffled. */
+	pairs?: [string, string][];
+	/** cloze: text with blanks written {{answer}}, or {{answer|other accepted answer}}. */
+	cloze?: string;
+	/** trace: the values that should hold after each step through `code`. */
+	trace?: TraceStep[];
 }
 
 /** One spoke of the skill radar. */

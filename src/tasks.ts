@@ -1,7 +1,7 @@
 import { App, Notice, TFile, normalizePath } from "obsidian";
 import { ClaudeCli } from "./claude";
 import { Store } from "./store";
-import { Bank, Course, Lab, Question, Verdict } from "./types";
+import { Bank, Course, Lab, Question, QuestionType, Verdict } from "./types";
 import { hashFlag, validateLab, detectToolchain, describeToolchain } from "./labs";
 import type { Strictness } from "./settings";
 import { hashText } from "./util";
@@ -429,6 +429,16 @@ export function bankPrompt(
 		"- Every short/command question needs \"expected\" and \"rubric\". \"accept\" is optional and must only",
 		"  match genuinely correct answers; a non-match just sends it for marking, so be conservative.",
 		"- \"ref\" must be a heading that really exists in the note, written as \"<note title>#<heading text>\".",
+		"- Where the note's content suits them, also use these hands-on types. They are marked instantly, so",
+		"  every answer must be exact:",
+		"  - \"hotspot\": code in \"code\" (no line numbers in it) and a question about one line: which is wrong,",
+		"    vulnerable, or does something. \"lines\" lists the 1-based answer line(s).",
+		"  - \"trace\": for assembly or step-by-step code. \"code\" holds the instructions; \"trace\" is 2-5 steps,",
+		"    each the 1-based \"line\" just executed and the values that then hold. Registers in hex, flags 0 or 1.",
+		"  - \"order\": \"items\" lists 3-7 steps of a procedure in the correct order; they are shown shuffled.",
+		"  - \"match\": \"pairs\" lists 3-6 [left, right] pairs, every right side different.",
+		"  Use them only where they genuinely fit, at most about a quarter of the bank. A note with no code",
+		"  gets no hotspot or trace questions.",
 		"",
 		"SHAPE",
 		'{"id":"<bank id>","title":"<short title>","note":"<note path>","questions":[',
@@ -436,7 +446,11 @@ export function bankPrompt(
 		'  "code":"<optional>","choices":["a","b","c","d"],"answer":0,"explain":"<why>","ref":"<note#heading>"},',
 		' {"id":"q2","tier":"hard","type":"multi","topic":"...","axis":"...","prompt":"...","choices":[...],"answer":[0,2],"explain":"..."},',
 		' {"id":"q3","tier":"brutal","type":"short","topic":"...","axis":"...","prompt":"...","expected":"...","rubric":["..."],"explain":"..."},',
-		' {"id":"q4","tier":"hard","type":"command","topic":"...","axis":"...","prompt":"...","expected":"...","rubric":["..."],"accept":["^regex$"],"explain":"..."}',
+		' {"id":"q4","tier":"hard","type":"command","topic":"...","axis":"...","prompt":"...","expected":"...","rubric":["..."],"accept":["^regex$"],"explain":"..."},',
+		' {"id":"q5","tier":"hard","type":"hotspot","topic":"...","axis":"...","prompt":"Which line copies without a bounds check?","code":"...","lines":[3],"explain":"..."},',
+		' {"id":"q6","tier":"brutal","type":"trace","topic":"...","axis":"...","prompt":"Step through and give each value.","code":"mov eax, 0x10\\nadd eax, 1","trace":[{"line":1,"expect":{"eax":"0x10"}},{"line":2,"expect":{"eax":"0x11","ZF":"0"}}],"explain":"..."},',
+		' {"id":"q7","tier":"easy","type":"order","topic":"...","axis":"...","prompt":"Put these steps in order.","items":["first","second","third"],"explain":"..."},',
+		' {"id":"q8","tier":"easy","type":"match","topic":"...","axis":"...","prompt":"Match each register to its number.","pairs":[["RAX","0"],["RCX","1"],["RDX","2"]],"explain":"..."}',
 		"]}",
 		"",
 		`Use exactly: "id": ${JSON.stringify(bankId(course, title))}, "note": ${JSON.stringify(notePath)}, "title": ${JSON.stringify(`${course.title} · ${title}`)}`,
@@ -493,19 +507,78 @@ function normaliseChoice(c: string): string {
 	return String(c).toLowerCase().replace(/[`*_]/g, "").replace(/\s+/g, " ").trim();
 }
 
-/** Rejects a bank that would break the view, before it reaches the vault. */
+const TYPES: readonly QuestionType[] = [
+	"mcq", "multi", "short", "command", "image", "hotspot", "trace", "order", "match", "cloze",
+];
+
+/**
+ * Checks one of the hands-on types and tidies what it can: values come back
+ * as strings, whatever JSON type the generator used. Returns what is wrong,
+ * or null if it is usable.
+ */
+export function checkInteractive(q: Question): string | null {
+	const codeLines = (q.code ?? "").split("\n").length;
+	switch (q.type) {
+		case "hotspot":
+			if (!q.code?.trim()) return "has no code to click";
+			if (!Array.isArray(q.lines) || !q.lines.length) return "has no answer lines";
+			if (q.lines.some((l) => !Number.isInteger(l) || l < 1 || l > codeLines)) return "points at a line outside its code";
+			return null;
+		case "trace":
+			if (!q.code?.trim()) return "has no code to step through";
+			if (!Array.isArray(q.trace) || !q.trace.length) return "has no steps";
+			for (const step of q.trace) {
+				if (!Number.isInteger(step?.line) || step.line < 1 || step.line > codeLines) return "has a step outside its code";
+				if (!step.expect || typeof step.expect !== "object" || !Object.keys(step.expect).length) {
+					return "has a step with nothing to fill in";
+				}
+				step.expect = Object.fromEntries(Object.entries(step.expect).map(([k, v]) => [k, String(v)]));
+			}
+			return null;
+		case "order":
+			if (!Array.isArray(q.items) || q.items.length < 3) return "needs at least three items";
+			q.items = q.items.map(String);
+			if (new Set(q.items.map((s) => s.trim().toLowerCase())).size !== q.items.length) return "repeats an item";
+			return null;
+		case "match":
+			if (!Array.isArray(q.pairs) || q.pairs.length < 3) return "needs at least three pairs";
+			if (q.pairs.some((p) => !Array.isArray(p) || p.length !== 2)) return "has a malformed pair";
+			q.pairs = q.pairs.map(([l, r]) => [String(l), String(r)]);
+			if (new Set(q.pairs.map(([, r]) => r.trim().toLowerCase())).size !== q.pairs.length) {
+				return "has two pairs with the same answer";
+			}
+			return null;
+		case "cloze":
+			return q.cloze && /\{\{[^}]+\}\}/.test(q.cloze) ? null : "has no blanks";
+		default:
+			return null;
+	}
+}
+
+/**
+ * Rejects a bank that would break the view, before it reaches the vault. A
+ * broken hands-on question is dropped rather than failing the whole bank,
+ * which would cost a full rebuild.
+ */
 export function validateBank(bank: Bank, course: Course): string | null {
 	if (!bank || !Array.isArray(bank.questions) || !bank.questions.length) return "Claude returned no questions.";
 	const axes = new Set(course.axes.map((a) => a.id));
 	const seen = new Set<string>();
+	const broken = new Set<Question>();
 	for (const [i, q] of bank.questions.entries()) {
 		if (!q.id || seen.has(q.id)) q.id = `q${i + 1}`;
 		seen.add(q.id);
 		if (!["easy", "hard", "brutal"].includes(q.tier)) q.tier = "easy";
-		if (!["mcq", "multi", "short", "command", "image"].includes(q.type)) q.type = "short";
+		if (!TYPES.includes(q.type)) q.type = "short";
 		if (!q.topic) q.topic = "general";
 		if (!q.axis || !axes.has(q.axis)) q.axis = course.axes[0].id;
 		if (!q.explain) q.explain = "";
+		const problem = checkInteractive(q);
+		if (problem) {
+			console.warn(`Recall Lab: dropped ${q.id}: its ${q.type} question ${problem}.`);
+			broken.add(q);
+			continue;
+		}
 		if (q.type === "mcq") {
 			if (!Array.isArray(q.choices) || q.choices.length < 2) return `Question ${q.id} is multiple choice with no options.`;
 			if (typeof q.answer !== "number" || q.answer < 0 || q.answer >= q.choices.length) {
@@ -528,6 +601,8 @@ export function validateBank(bank: Bank, course: Course): string | null {
 			q.rubric = [q.expected ?? "A correct, complete answer."];
 		}
 	}
+	if (broken.size) bank.questions = bank.questions.filter((q) => !broken.has(q));
+	if (!bank.questions.length) return "None of the questions Claude wrote were usable.";
 
 	// Each question's id comes from its content, so rebuilding a quiz gives a
 	// changed question a new id, and a fresh history, while an unchanged one
