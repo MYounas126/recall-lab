@@ -5,7 +5,7 @@ import { clozeBlanks, clozePieces, gradeLocally, sameValue } from "./grader";
 import { shuffled } from "./util";
 import { QuestionScore, renderRadar, scoreAxes, scoreCourses, weakestTested, untested, withBefore, AxisScore } from "./radar";
 import {
-	Attempt, Bank, Confidence, Course, ExamItem, Lab, LabProgress, ProgressFile, Question, SessionSummary, Tier,
+	Attempt, Bank, BlurtResult, Confidence, Course, ExamItem, Lab, LabProgress, ProgressFile, Question, SessionSummary, Tier,
 	idOf, labScore, letterGrade, qkey,
 } from "./types";
 import { AnswerIndex, calibration } from "./history";
@@ -22,6 +22,7 @@ import { needingVariants, withVariants } from "./variants";
 import { findLeeches } from "./leeches";
 import { needingSteps, needsGuidance } from "./guided";
 import { SECOND_TRY_CAP, combineTries } from "./tasks";
+import { blurtExam, missedHeading } from "./blurt";
 import { checkFlag } from "./labs";
 import { INSTALL_HINT } from "./claude";
 
@@ -33,7 +34,16 @@ const USD_PER_QUIZ = 0.13;
 
 export const VIEW_TYPE_RECALL = "recall-lab-view";
 
-type Screen = "home" | "folder" | "exam" | "results" | "history" | "lab" | "clinic";
+type Screen = "home" | "folder" | "exam" | "results" | "history" | "lab" | "clinic" | "blurt";
+
+/** A write-it-down page: what is written so far, its deadline, and Claude's comparison once it is in. */
+interface BlurtPage {
+	path: string;
+	text: string;
+	/** When the suggested time runs out, in ms. */
+	ends: number;
+	result: BlurtResult | null;
+}
 
 
 interface LiveAnswer {
@@ -70,6 +80,10 @@ export class RecallLabView extends ItemView {
 	private coachingInFlight = new Set<string>();
 	/** The leech clinic's question on screen, by key. */
 	private clinicKey: string | null = null;
+	/** The note being written down from memory; its result once compared. */
+	private blurt: BlurtPage | null = null;
+	/** The write-it-down countdown, while it runs. */
+	private blurtClock: number | null = null;
 	/** Which guided step of the question on screen is showing. */
 	private guideStage: { index: number; step: number } | null = null;
 	/** Ends a second try that is waiting on you, as "show the answer". */
@@ -112,6 +126,12 @@ export class RecallLabView extends ItemView {
 	async onClose(): Promise<void> {
 		// A second try still open keeps the first answer, which is then saved.
 		this.settleSecondTry?.();
+		this.stopBlurtClock();
+	}
+
+	private stopBlurtClock(): void {
+		if (this.blurtClock !== null) window.clearInterval(this.blurtClock);
+		this.blurtClock = null;
 	}
 
 	/** Keyboard shortcuts on the exam screen; see keyAction for the map. */
@@ -153,7 +173,7 @@ export class RecallLabView extends ItemView {
 	 * dead button — so background work must not trigger one.
 	 */
 	get occupied(): boolean {
-		return this.screen === "exam" || this.screen === "lab";
+		return this.screen === "exam" || this.screen === "lab" || (this.screen === "blurt" && !this.blurt?.result);
 	}
 
 	/**
@@ -236,6 +256,7 @@ export class RecallLabView extends ItemView {
 		const root = this.contentEl;
 		root.empty();
 		root.addClass("recall-lab");
+		this.stopBlurtClock();
 
 		if (this.screen === "exam") { await this.renderExam(root); return; }
 		this.examKeys = null;
@@ -251,6 +272,7 @@ export class RecallLabView extends ItemView {
 		else if (this.screen === "results") await this.renderResults(main);
 		else if (this.screen === "history") await this.renderHistory(main);
 		else if (this.screen === "clinic" && this.clinicKey) await this.renderClinic(main, this.clinicKey);
+		else if (this.screen === "blurt" && this.blurt) await this.renderBlurt(main, this.blurt);
 		else if (this.screen === "folder" && this.selectedFolder) await this.renderFolder(main, this.selectedFolder);
 		else await this.renderHome(main);
 	}
@@ -432,6 +454,159 @@ export class RecallLabView extends ItemView {
 		const week = ahead.slice(1).reduce((a, b) => a + b, 0);
 		if (week) {
 			panel.createDiv({ cls: "rl-muted", text: `Coming up: ${ahead[1]} tomorrow, ${week} over the next 7 days.` });
+		}
+	}
+
+	/**
+	 * Write it all down: a timed page for everything you remember about a
+	 * note, before its quiz. A page left unfinished for the same note is
+	 * picked up again, with its writing and its clock, rather than wiped.
+	 */
+	async startBlurt(path: string): Promise<void> {
+		await this.refresh();
+		if (this.blurt?.path !== path || this.blurt.result) {
+			this.blurt = { path, text: "", result: null, ends: Date.now() + this.plugin.settings.blurtMinutes * 60_000 };
+		}
+		this.screen = "blurt";
+		await this.render();
+	}
+
+	private async renderBlurt(main: HTMLElement, blurt: BlurtPage): Promise<void> {
+		const name = blurt.path.split("/").pop()!.replace(/\.md$/, "");
+		const head = main.createDiv({ cls: "rl-head" });
+		const back = head.createEl("a", { cls: "rl-link", text: "← back" });
+		back.onclick = (e) => { e.preventDefault(); this.blurt = null; void this.revealNote(blurt.path); };
+		head.createEl("h2", { text: `Write it all down: ${name}` });
+		if (blurt.result) {
+			await this.renderBlurtResult(main, blurt.path, blurt.result);
+			return;
+		}
+
+		const panel = main.createDiv({ cls: "rl-panel" });
+		panel.createDiv({
+			cls: "rl-muted",
+			text: "Without looking at the note, write down everything you remember about it: facts, rules, steps, " +
+				"examples. Rough notes are fine. Then Claude compares it with the note and shows what you left out.",
+		});
+		const clock = panel.createDiv({ cls: "rl-blurt-clock" });
+		const area = panel.createEl("textarea", { cls: "rl-text rl-blurt-text", attr: { rows: "14", placeholder: "Everything you remember…" } });
+		area.value = blurt.text;
+		area.oninput = () => (blurt.text = area.value);
+		const label = "Done: compare with my note (uses Claude)";
+		const done = new ButtonComponent(panel.createDiv({ cls: "rl-actions" })).setButtonText(label).setCta();
+
+		// The clock is a guide, not a guillotine: at zero it says so and waits.
+		// Its deadline belongs to the page, so a redraw does not restart it,
+		// and only one interval ever runs: an older one is cleared first, and
+		// each clears itself at zero.
+		this.stopBlurtClock();
+		const tick = () => {
+			const left = Math.max(0, Math.ceil((blurt.ends - Date.now()) / 1000));
+			clock.setText(left ? `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` : "Time's up. Finish your sentence, then press Done.");
+			clock.toggleClass("rl-blurt-over", !left);
+			if (!left) {
+				window.clearInterval(id);
+				if (this.blurtClock === id) this.blurtClock = null;
+			}
+		};
+		const id = window.setInterval(tick, 1000);
+		this.blurtClock = id;
+		tick();
+
+		done.onClick(async () => {
+			if (!area.value.trim()) { new Notice("Write down what you remember first."); return; }
+			this.stopBlurtClock();
+			done.setDisabled(true).setButtonText("Claude is comparing it with your note…");
+			area.setAttr("disabled", "true");
+			this.plugin.log.info("checking a write-it-down", { note: blurt.path, chars: area.value.length });
+			let res: BlurtResult | { error: string };
+			try {
+				res = await this.plugin.tasks.checkBlurt(blurt.path, area.value);
+			} catch (e) {
+				res = { error: String(e) };
+			}
+			if ("error" in res) {
+				this.plugin.log.error("write-it-down check failed", { note: blurt.path, error: res.error });
+				new Notice(`Could not compare it with the note: ${res.error}`, 12000);
+				done.setDisabled(false).setButtonText(label);
+				area.removeAttribute("disabled");
+				return;
+			}
+			// Shown before it is saved: the comparison is paid for, and a save
+			// that fails must not lose it, or leave the page stuck.
+			blurt.result = res;
+			if (this.screen === "blurt" && this.blurt === blurt) await this.render();
+			try {
+				await this.plugin.store.saveBlurt(res);
+			} catch (e) {
+				this.plugin.log.error("could not save a write-it-down", { note: blurt.path, error: String(e) });
+				new Notice(`Recall Lab could not save this comparison: ${String(e)}`, 12000);
+			}
+		});
+		window.setTimeout(() => area.focus(), 0);
+	}
+
+	/** What you remembered against the note, with links to what you left out, and the quiz. */
+	private async renderBlurtResult(main: HTMLElement, path: string, r: BlurtResult): Promise<void> {
+		const hero = main.createDiv({ cls: "rl-results" });
+		hero.createDiv({ cls: "rl-result-grade", text: `${r.score}%` });
+		hero.createDiv({
+			cls: "rl-result-sub",
+			text: `of the note recalled · ${r.covered.length} section${r.covered.length === 1 ? "" : "s"} covered, ${r.missed.length} left out`,
+		});
+		if (r.feedback) {
+			const fb = main.createDiv({ cls: "rl-coaching" });
+			fb.createDiv({ cls: "rl-model-label", text: "Feedback from Claude" });
+			await this.md(r.feedback, fb.createDiv());
+		}
+		const link = path.replace(/\.md$/, "");
+		if (r.missed.length) {
+			const panel = main.createDiv({ cls: "rl-panel" });
+			panel.createEl("h3", { text: "What you left out" });
+			for (const m of r.missed) {
+				const row = panel.createDiv({ cls: "rl-review-row" });
+				const a = row.createEl("a", { cls: "rl-link", text: m.heading });
+				const target = m.link === undefined ? m.heading : m.link;
+				a.onclick = (e) => { e.preventDefault(); void this.app.workspace.openLinkText(target ? `${link}#${target}` : link, "", false); };
+				if (m.point) void this.md(m.point, row.createDiv({ cls: "rl-review-fb" }));
+			}
+		}
+		if (r.covered.length) {
+			const panel = main.createDiv({ cls: "rl-panel" });
+			panel.createEl("h3", { text: "What you remembered" });
+			const chips = panel.createDiv({ cls: "rl-session-chips" });
+			for (const h of r.covered) chips.createSpan({ cls: "rl-chip", text: h });
+		}
+
+		const actions = main.createDiv({ cls: "rl-actions" });
+		const bank = this.banks.find((b) => b.note === path);
+		if (bank) {
+			new ButtonComponent(actions)
+				.setButtonText(r.missed.length ? "Start the quiz: left-out sections first" : "Start the quiz")
+				.setCta()
+				.onClick(() => void this.beginBlurtExam(bank, r));
+		}
+		new ButtonComponent(actions).setButtonText("Back to the course").onClick(() => { this.blurt = null; void this.revealNote(path); });
+	}
+
+	/** The note's quiz with the sections you left out asked first. */
+	private async beginBlurtExam(bank: Bank, r: BlurtResult): Promise<void> {
+		const progress = await this.plugin.store.readProgress();
+		const items = Store.itemsOf([bank, ...this.highlightBanks.filter((b) => b.note === bank.note)]);
+		const total = Math.min(this.plugin.settings.defaultLength, items.length);
+		await this.launch(bank, blurtExam(items, new AnswerIndex(progress.attempts), total, r.missed.map(missedHeading)));
+	}
+
+	/** Recent write-it-down checks: how much of each note came back from memory. */
+	private renderBlurts(main: HTMLElement, blurts: BlurtResult[]): void {
+		if (!blurts.length) return;
+		const panel = main.createDiv({ cls: "rl-panel" });
+		panel.createEl("h3", { text: "Written down from memory" });
+		for (const b of blurts.slice(-8).reverse()) {
+			const row = panel.createDiv({ cls: "rl-bar-row" });
+			row.createSpan({ cls: "rl-bar-label", text: b.note.split("/").pop()!.replace(/\.md$/, "") });
+			row.createDiv({ cls: "rl-progress" }).createDiv({ cls: "rl-progress-fill" }).setCssProps({ "--rl-fill": `${b.score}%` });
+			row.createSpan({ cls: "rl-bar-value", text: `${b.score}% · ${describeAgo(new Date(b.at), new Date())}` });
 		}
 	}
 
@@ -858,6 +1033,10 @@ export class RecallLabView extends ItemView {
 			}
 
 			const right = row.createDiv({ cls: "rl-note-actions" });
+			new ButtonComponent(right)
+				.setIcon("pencil")
+				.setTooltip("Write down everything you remember, then compare it with the note (uses Claude)")
+				.onClick(() => void this.startBlurt(path));
 			if (bank) {
 				right.createSpan({ cls: "rl-chip", text: `${bank.questions.length} q` });
 				new ButtonComponent(right).setButtonText("Exam").setCta()
@@ -1989,6 +2168,7 @@ export class RecallLabView extends ItemView {
 
 		await this.renderActivity(main, progress);
 		this.renderCalibration(main, progress.attempts);
+		this.renderBlurts(main, progress.blurts ?? []);
 
 		// Weakest topics across everything.
 		const byTopic = new Map<string, number[]>();

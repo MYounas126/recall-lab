@@ -64,6 +64,15 @@ once, then answer the whole problem unaided. Steps are written per course on
 request (*Write guided steps*, which uses Claude), and step answers are not
 recorded.
 
+**Write it all down.** The pencil beside a note, or the command **Write down
+everything I remember about this note**, opens a page with a three-minute
+clock: without looking, write everything you remember. Claude then compares it
+with the note section by section (one request) and shows what you covered,
+what you left out with links to those sections, and how much of the note came
+back. *Start the quiz* then asks the left-out sections first. History keeps
+your recent results. Leave the page before pressing Done and it waits for you:
+opening the same note's page again picks up your writing and the clock.
+
 **Recall before recognition** (Settings → Questions, or *Recall first* in the
 exam bar) hides the options of multiple-choice and select-all questions until
 you have typed, or just thought of, your answer. Producing an answer builds

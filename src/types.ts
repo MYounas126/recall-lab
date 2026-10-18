@@ -187,6 +187,25 @@ export interface ProgressFile {
 	days?: Record<string, DayLog>;
 	/** Leech clinic diagnoses, keyed by question key (see qkey). */
 	clinic?: Record<string, Diagnosis>;
+	/** "Write it all down" checks, oldest first. */
+	blurts?: BlurtResult[];
+}
+
+/** How a "write it all down" attempt compared with its note. */
+export interface BlurtResult {
+	/** Vault path of the note. */
+	note: string;
+	at: string;
+	/** Share of the note's important content recalled, 0–100, as Claude judged it. */
+	score: number;
+	feedback: string;
+	/** Headings of the sections whose main idea you wrote down. */
+	covered: string[];
+	/**
+	 * Sections you left out, each with its main point and where it is in the
+	 * note, as a heading link (absent on results from before it was kept).
+	 */
+	missed: { heading: string; point: string; link?: string }[];
 }
 
 /** How one finished day went. */
