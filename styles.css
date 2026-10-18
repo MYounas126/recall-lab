@@ -588,6 +588,10 @@
 .rl-collapsed { display: none; }
 .rl-panel-confident { border-left: 3px solid var(--text-warning); }
 
+.rl-recall-stage { margin: 0.6rem 0; }
+.rl-recall-stage .rl-hint { margin-bottom: 0.4rem; }
+.rl-recalled { margin: 0.4rem 0 0.6rem; }
+
 .rl-keys {
 	flex-basis: 100%;
 	font-size: var(--font-ui-smaller); color: var(--text-faint);

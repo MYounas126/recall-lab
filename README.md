@@ -51,6 +51,12 @@ be reached, the answer is recorded as 0 with the reason, so an exam never
 stalls. **Strictness** (lenient, normal or brutal) is set in settings and
 written into every marking request.
 
+**Recall before recognition** (Settings → Questions, or *Recall first* in the
+exam bar) hides the options of multiple-choice and select-all questions until
+you have typed, or just thought of, your answer. Producing an answer builds
+memory better than spotting one; what you typed is shown above the options and
+kept with your answer.
+
 ## Daily review
 
 Every answer you give, in any exam, feeds a spaced-repetition schedule run by

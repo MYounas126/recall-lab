@@ -11,6 +11,7 @@ import {
 	streakOf,
 } from "./memory";
 import { keyAction } from "./keys";
+import { RecallStage, optionsHidden, recallApplies } from "./recall";
 import { checkFlag } from "./labs";
 import { INSTALL_HINT } from "./claude";
 
@@ -29,6 +30,8 @@ interface AnswerState {
 	chosen: number[];
 	text: string;
 	image?: string;
+	/** Typed from memory before the options were shown, in recall-first mode. */
+	recalled?: string;
 }
 
 interface LiveAnswer {
@@ -61,6 +64,8 @@ export class RecallLabView extends ItemView {
 	private sessionKind: "exam" | "review" = "exam";
 	/** Sessions whose on-demand feedback has been asked for and not yet landed. */
 	private coachingInFlight = new Set<string>();
+	/** Recall-first state for the question on screen. */
+	private recallStage: RecallStage | null = null;
 	/** What the keyboard can do to the question on screen. */
 	private examKeys: {
 		choose(slot: number): void;
@@ -719,6 +724,7 @@ export class RecallLabView extends ItemView {
 		this.bank = bank;
 		this.examItems = picked;
 		this.sessionKind = kind;
+		this.recallStage = null;
 		this.index = 0;
 		this.answers = [];
 		this.sessionId = `s-${Date.now().toString(36)}`;
@@ -739,6 +745,18 @@ export class RecallLabView extends ItemView {
 		bar.createSpan({ cls: "rl-crumb", text: this.bank.title });
 		bar.createSpan({ cls: `rl-tier-badge rl-tier-${q.tier}`, text: tierLabel(q.tier) });
 		bar.createSpan({ cls: "rl-count", text: `${this.index + 1} / ${this.examItems.length}` });
+		const recallOn = this.plugin.settings.recallFirst;
+		if (recallApplies(true, q.type)) {
+			const toggle = bar.createEl("a", { cls: "rl-link", text: `Recall first: ${recallOn ? "on" : "off"}` });
+			toggle.setAttr("aria-label", "Hide the options until you have tried to recall the answer");
+			toggle.onclick = async (e) => {
+				e.preventDefault();
+				if (this.revealed) return;
+				this.plugin.settings.recallFirst = !recallOn;
+				await this.plugin.saveSettings();
+				await this.render();
+			};
+		}
 		const quit = bar.createEl("a", { cls: "rl-link rl-quit", text: "End exam" });
 		quit.onclick = (e) => { e.preventDefault(); void this.finish(); };
 		const track = bar.createDiv({ cls: "rl-progress rl-progress-slim" });
@@ -752,7 +770,19 @@ export class RecallLabView extends ItemView {
 		await this.md(q.prompt, card.createDiv({ cls: "rl-prompt" }));
 		if (q.code) card.createEl("pre", { cls: "rl-code" }).createEl("code", { text: q.code });
 
-		const state: AnswerState = { chosen: [], text: "" };
+		if (optionsHidden(recallOn, q.type, this.recallStage, this.index)) {
+			this.renderRecallStage(card);
+			return;
+		}
+
+		const recalled = this.recallStage?.index === this.index ? this.recallStage.text.trim() : "";
+		if (recalled) {
+			const quote = card.createDiv({ cls: "rl-model rl-recalled" });
+			quote.createDiv({ cls: "rl-model-label", text: "You recalled" });
+			quote.createDiv({ text: recalled });
+		}
+
+		const state: AnswerState = { chosen: [], text: "", recalled: recalled || undefined };
 		const options = this.renderAnswerWidget(q, card.createDiv({ cls: "rl-answer" }), state);
 
 		// Saying how sure you are tunes the schedule: a lucky guess comes back
@@ -785,6 +815,38 @@ export class RecallLabView extends ItemView {
 			focus: () => submit.buttonEl.focus(),
 		};
 		submit.buttonEl.focus();
+	}
+
+	/**
+	 * Recall first: the options stay hidden while you type, or just think of,
+	 * the answer. Showing them keeps what you typed and redraws the question
+	 * with the options under it; the clock keeps running.
+	 */
+	private renderRecallStage(card: HTMLElement): void {
+		const index = this.index;
+		const stage = card.createDiv({ cls: "rl-recall-stage" });
+		stage.createDiv({
+			cls: "rl-hint",
+			text: "Recall it first: type your answer, or just think of it, then show the options.",
+		});
+		const area = stage.createEl("textarea", {
+			cls: "rl-text",
+			attr: { rows: "2", placeholder: "Your answer, from memory" },
+		});
+		const actions = card.createDiv({ cls: "rl-actions" });
+		const reveal = async () => {
+			this.recallStage = { index, text: area.value, shown: true };
+			await this.render();
+		};
+		const show = new ButtonComponent(actions).setButtonText("Show options").setCta().onClick(() => void reveal());
+		const mod = Platform.isMacOS ? "⌘" : "Ctrl";
+		actions.createDiv({ cls: "rl-keys", text: `Keys: ${mod}+Enter shows the options · Esc leaves the box, then Enter` });
+		this.examKeys = {
+			choose: () => undefined,
+			submit: () => void reveal(),
+			focus: () => show.buttonEl.focus(),
+		};
+		window.setTimeout(() => area.focus(), 0);
 	}
 
 	/** Draws the answer controls. Returns the option inputs in display order, for the 1–9 keys. */
@@ -864,6 +926,9 @@ export class RecallLabView extends ItemView {
 		if ((q.type === "mcq" || q.type === "multi") && !state.chosen.length) { new Notice("Pick an answer first."); return; }
 		this.revealed = true;
 		const ms = Date.now() - this.questionStart;
+		const extra: Pick<Attempt, "confidence" | "recalled"> = {};
+		if (confidence) extra.confidence = confidence;
+		if (state.recalled) extra.recalled = state.recalled;
 
 		const local = gaveUp
 			? { score: 0, verdict: "incorrect" as const, feedback: "You skipped this one.", missing: [q.topic] }
@@ -871,7 +936,7 @@ export class RecallLabView extends ItemView {
 
 		const live: LiveAnswer = { q, bankId: item.bankId, response: state.text || describeChoice(q, state.chosen), image: state.image, ms };
 		if (local) {
-			live.attempt = this.attemptFrom(item, live.response, local.score, local.verdict, local.feedback, local.missing, "local", ms, confidence);
+			live.attempt = this.attemptFrom(item, live.response, local.score, local.verdict, local.feedback, local.missing, "local", ms, extra);
 			this.keep(live.attempt);
 			this.answers.push(live);
 			this.showFeedback(q, live, wrap);
@@ -886,11 +951,11 @@ export class RecallLabView extends ItemView {
 		if ("error" in marked) {
 			this.plugin.log.error("marking failed", { question: q.id, error: marked.error });
 			live.attempt = this.attemptFrom(item, live.response, 0, "incorrect",
-				`Could not reach Claude to mark this: ${marked.error}`, [q.topic], "error", ms, confidence);
+				`Could not reach Claude to mark this: ${marked.error}`, [q.topic], "error", ms, extra);
 		} else {
 			this.plugin.log.info("answer marked", { question: q.id, score: marked.score });
 			live.attempt = this.attemptFrom(item, live.response, marked.score, marked.verdict,
-				[marked.feedback, marked.improve].filter(Boolean).join(" "), marked.missing, "ai", ms, confidence);
+				[marked.feedback, marked.improve].filter(Boolean).join(" "), marked.missing, "ai", ms, extra);
 		}
 		this.keep(live.attempt);
 		panel.remove();
@@ -912,14 +977,15 @@ export class RecallLabView extends ItemView {
 	 */
 	private attemptFrom(
 		item: ExamItem, response: string, score: number, verdict: Attempt["verdict"],
-		feedback: string, missing: string[], gradedBy: Attempt["gradedBy"], ms: number, confidence?: Confidence
+		feedback: string, missing: string[], gradedBy: Attempt["gradedBy"], ms: number,
+		extra: Pick<Attempt, "confidence" | "recalled"> = {}
 	): Attempt {
 		const q = item.q;
 		return {
 			ts: new Date().toISOString(), sessionId: this.sessionId, bankId: item.bankId,
 			questionId: q.id, tier: q.tier, type: q.type, topic: q.topic,
 			response, score, verdict, feedback, missing, gradedBy, ms,
-			...(confidence ? { confidence } : {}),
+			...extra,
 		};
 	}
 
@@ -978,6 +1044,7 @@ export class RecallLabView extends ItemView {
 
 	private async advance(): Promise<void> {
 		this.revealed = false;
+		this.recallStage = null;
 		if (this.index === this.examItems.length - 1) { await this.finish(); return; }
 		this.index += 1;
 		this.questionStart = Date.now();
