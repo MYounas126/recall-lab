@@ -8,6 +8,7 @@ import { Log } from "./log";
 import { ConfirmModal, RecallLabView, VIEW_TYPE_RECALL } from "./view";
 import { Bank, Course, Question } from "./types";
 import { needingVariants } from "./variants";
+import { Leech } from "./leeches";
 import { SerialQueue } from "./util";
 import { AnswerIndex } from "./history";
 import { Memory, dateKey, describeAgo, endOfDay, expectedScore, keyOf } from "./memory";
@@ -651,6 +652,32 @@ export default class RecallLabPlugin extends Plugin {
 		if (elsewhere) parts.push(`${elsewhere} already queued`);
 		new Notice(`${parts.join("; ")}.`, 8000);
 		await this.refreshView();
+	}
+
+	/**
+	 * Diagnoses a question you keep missing, saves the diagnosis and opens it.
+	 * Uses Claude, so it only ever runs from a button that says so.
+	 */
+	async diagnoseLeech(leech: Leech, notePath: string | undefined): Promise<void> {
+		const res = await this.build(`clinic:${leech.key}`, "the diagnosis", async () => {
+			this.log.info("diagnosing a leech", { question: leech.key, misses: leech.misses });
+			const notice = new Notice("Claude is reading your wrong answers…", 0);
+			try {
+				return await this.tasks.diagnoseLeech(leech, notePath);
+			} finally {
+				notice.hide();
+			}
+		});
+		if (!res) return;
+		if ("error" in res) {
+			this.log.error("diagnosis failed", { question: leech.key, error: res.error });
+			new Notice(`Could not diagnose that question: ${res.error}`, 12000);
+			return;
+		}
+		await this.store.saveDiagnosis(leech.key, res);
+		this.log.info("leech diagnosed", { question: leech.key });
+		const view = await this.activate();
+		if (!view.occupied) await view.openClinic(leech.key);
 	}
 
 	/** Offers to write variants for every mature question that has none, across all courses. */

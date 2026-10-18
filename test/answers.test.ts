@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import { strict as assert } from "node:assert";
-import { blankSize, describeResponse, notReady, plain, scrambled } from "../src/answers";
+import { blankSize, describeResponse, notReady, plain, questionDetail, questionLine, scrambled } from "../src/answers";
 import { question } from "./helpers";
 
 const state = (extra: object = {}) => ({ text: "", chosen: [], ...extra });
@@ -60,4 +60,12 @@ test("plain text keeps markers that are not markdown", () => {
 	assert.notEqual(plain("`*rsp`"), plain("`rsp`"), "a dereference stays visible");
 	assert.equal(plain("`*rsp`"), "*rsp");
 	assert.equal(plain("2 * 3 * 4"), "2 * 3 * 4");
+});
+
+test("a question in one line: a cloze shows its sentence, not its prompt", () => {
+	const cloze = question("c", { type: "cloze", prompt: "Fill in the blank.", cloze: "Writing to {{EAX}} clears the top of {{RAX}}." });
+	assert.equal(questionLine(cloze), "Writing to ＿＿＿ clears the top of ＿＿＿.");
+	assert.equal(questionLine(question("q", { prompt: "First line\nmore" })), "First line");
+	const order = question("o", { type: "order", items: ["sign", "decompile", "patch"] });
+	assert.equal(questionDetail(order), "- decompile\n- patch\n- sign", "alphabetical, so the order is not given away");
 });

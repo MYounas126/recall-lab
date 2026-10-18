@@ -587,6 +587,9 @@
 
 .rl-collapsed { display: none; }
 .rl-panel-confident { border-left: 3px solid var(--text-warning); }
+.rl-lesson { padding-left: 1.4rem; }
+.rl-lesson li { margin: 0.4rem 0; }
+.rl-lesson li p { margin: 0; }
 
 /* Click the bug and step-through trace: numbered code */
 .rl-hotspot {

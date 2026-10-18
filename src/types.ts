@@ -179,6 +179,8 @@ export interface ProgressFile {
 	 * later change of settings cannot rewrite the streak.
 	 */
 	days?: Record<string, DayLog>;
+	/** Leech clinic diagnoses, keyed by question key (see qkey). */
+	clinic?: Record<string, Diagnosis>;
 }
 
 /** How one finished day went. */
@@ -187,6 +189,17 @@ export interface DayLog {
 	answers: number;
 	/** Whether nothing was left overdue when the day ended. */
 	clear: boolean;
+}
+
+/** What Claude made of a question you keep missing. */
+export interface Diagnosis {
+	at: string;
+	/** The misunderstanding your wrong answers share. */
+	misconception: string;
+	/** A short lesson that fixes it, step by step. */
+	lesson: string[];
+	/** A fresh question on the same idea, to try straight after the lesson. */
+	question: Question;
 }
 
 export const EMPTY_PROGRESS: ProgressFile = { version: 1, attempts: [], sessions: [], completed: {}, labs: {} };

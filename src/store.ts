@@ -3,6 +3,7 @@ import {
 	Attempt,
 	Bank,
 	Course,
+	Diagnosis,
 	ExamItem,
 	LabProgress,
 	DayLog,
@@ -242,6 +243,14 @@ export class Store {
 	async recordSession(summary: SessionSummary): Promise<ProgressFile> {
 		return this.update((data) => {
 			data.sessions.push(summary);
+		});
+	}
+
+	/** Keeps the leech clinic's diagnosis of one question, replacing any earlier one. */
+	async saveDiagnosis(key: string, diagnosis: Diagnosis): Promise<void> {
+		await this.update((data) => {
+			data.clinic = data.clinic ?? {};
+			data.clinic[key] = diagnosis;
 		});
 	}
 
