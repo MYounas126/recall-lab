@@ -4,9 +4,9 @@ import { Store } from "./store";
 import { gradeLocally } from "./grader";
 import { shuffled } from "./util";
 import { renderRadar, scoreAxes, scoreCourses, weakestTested, untested, AxisScore } from "./radar";
-import { Attempt, Bank, Confidence, Course, ExamItem, Lab, LabProgress, Question, SessionSummary, Tier, labScore, letterGrade } from "./types";
+import { Attempt, Bank, Confidence, Course, ExamItem, Lab, LabProgress, ProgressFile, Question, SessionSummary, Tier, labScore, letterGrade } from "./types";
 import { AnswerIndex, calibration } from "./history";
-import { Memory, ReviewPlan, counts, dailyRecord, describeWhen, endOfDay, keysOf, planReview, startOfDay, streakOf } from "./memory";
+import { DayRecord, Memory, ReviewPlan, counts, describeWhen, endOfDay, keysOf, planReview, settledRecord, startOfDay, streakOf } from "./memory";
 import { keyAction } from "./keys";
 import { checkFlag } from "./labs";
 import { INSTALL_HINT } from "./claude";
@@ -82,6 +82,9 @@ export class RecallLabView extends ItemView {
 	getIcon(): string { return "graduation-cap"; }
 
 	async onOpen(): Promise<void> {
+		// Focusable, so a click on plain text in the view keeps focus here and
+		// the exam's shortcuts keep working; otherwise focus falls to <body>.
+		this.contentEl.tabIndex = -1;
 		this.registerDomEvent(this.containerEl, "keydown", (e) => this.onKey(e));
 		await this.render();
 	}
@@ -90,15 +93,20 @@ export class RecallLabView extends ItemView {
 	private onKey(e: KeyboardEvent): void {
 		const keys = this.examKeys;
 		if (this.screen !== "exam" || !keys) return;
-		const target = e.target instanceof HTMLElement ? e.target : null;
-		const typing = target instanceof HTMLTextAreaElement ||
-			(target instanceof HTMLInputElement && !["radio", "checkbox", "button", "file"].includes(target.type));
+		// Tag names, not instanceof: a popout window has its own element
+		// classes, so instanceof HTMLTextAreaElement is false for a text box
+		// there, and typing "s" would submit the answer.
+		const target = e.target as HTMLElement | null;
+		const tag = target?.tagName ?? "";
+		const typing = tag === "TEXTAREA" || target?.isContentEditable === true ||
+			(tag === "INPUT" && !["radio", "checkbox", "button", "file"].includes((target as HTMLInputElement).type));
 		const action = keyAction({
 			key: e.key,
 			mod: Platform.isMacOS ? e.metaKey : e.ctrlKey,
+			otherMod: Platform.isMacOS ? e.ctrlKey : e.metaKey,
 			alt: e.altKey,
 			typing,
-			onButton: target instanceof HTMLButtonElement,
+			onButton: tag === "BUTTON",
 			answered: this.revealed,
 		});
 		if (!action) return;
@@ -108,7 +116,7 @@ export class RecallLabView extends ItemView {
 		else if (action.do === "skip") keys.skip?.();
 		else if (action.do === "next") keys.next?.();
 		else {
-			target?.blur();
+			target?.blur?.();
 			keys.focus();
 		}
 	}
@@ -299,7 +307,7 @@ export class RecallLabView extends ItemView {
 	}
 
 	/** Today's review over these banks, with every question's memory state. */
-	private async planFor(banks: Bank[]): Promise<{ plan: ReviewPlan; memory: Memory; keys: Set<string>; attempts: Attempt[] }> {
+	private async planFor(banks: Bank[]): Promise<{ plan: ReviewPlan; memory: Memory; keys: Set<string>; progress: ProgressFile }> {
 		const progress = await this.plugin.store.readProgress();
 		const memory = new Memory(progress.attempts, this.plugin.settings.targetRecall / 100);
 		const noteOf = new Map(this.banks.map((b) => [b.id, b.note]));
@@ -312,19 +320,19 @@ export class RecallLabView extends ItemView {
 			completed: progress.completed ?? {},
 			noteOf: (id) => noteOf.get(id),
 		});
-		return { plan, memory, keys: keysOf(items), attempts: progress.attempts };
+		return { plan, memory, keys: keysOf(items), progress };
 	}
 
 	/** What is due today, and the button that starts the review. */
 	private async renderReviewPanel(main: HTMLElement, banks: Bank[], course?: Course): Promise<void> {
-		const { plan, memory, keys, attempts } = await this.planFor(banks);
+		const { plan, memory, keys, progress } = await this.planFor(banks);
 		const now = new Date();
 		const panel = main.createDiv({ cls: "rl-panel rl-review-panel" });
 		const head = panel.createDiv({ cls: "rl-panel-head" });
 		head.createEl("h3", { text: course ? "Review this course" : "Today's review" });
 
 		// The streak is vault-wide, so only the overview shows it.
-		const streak = course ? null : streakOf(dailyRecord(attempts, this.plugin.settings.targetRecall / 100, keys, now));
+		const streak = course ? null : streakOf(await this.dayRecord(progress, now));
 		if (streak?.current) head.createSpan({ cls: "rl-streak", text: `🔥 ${streak.current}-day streak` });
 
 		const total = plan.due.length + plan.fresh.length;
@@ -678,6 +686,7 @@ export class RecallLabView extends ItemView {
 	}
 
 	private async renderExam(root: HTMLElement): Promise<void> {
+		this.examKeys = null;
 		const item = this.examItems[this.index];
 		if (!item || !this.bank) { this.screen = "home"; await this.render(); return; }
 		const q = item.q;
@@ -1276,7 +1285,7 @@ export class RecallLabView extends ItemView {
 		stat("Mean score", `${mean}%`);
 		stat("Notes completed", String(Object.keys(progress.completed ?? {}).length));
 
-		this.renderActivity(main, progress.attempts);
+		await this.renderActivity(main, progress);
 		this.renderCalibration(main, progress.attempts);
 
 		// Weakest topics across everything.
@@ -1324,10 +1333,28 @@ export class RecallLabView extends ItemView {
 		}
 	}
 
+	/**
+	 * The vault-wide day-by-day record behind the streak and the calendar.
+	 * Finished days are kept the first time they are worked out, so moving
+	 * the target recall later cannot rewrite them (see settledRecord).
+	 */
+	private async dayRecord(progress: ProgressFile, now: Date): Promise<DayRecord[]> {
+		const keys = keysOf(Store.itemsOf(this.banks));
+		const { days, settle } = settledRecord(progress.attempts, this.plugin.settings.targetRecall / 100, keys, now, progress.days ?? {});
+		if (Object.keys(settle).length) {
+			try {
+				await this.plugin.store.keepDays(settle);
+			} catch (e) {
+				this.plugin.log.error("could not keep the daily record", { error: String(e) });
+			}
+		}
+		return days;
+	}
+
 	/** The streak, and a year of daily activity in the style of a contributions calendar. */
-	private renderActivity(main: HTMLElement, attempts: Attempt[]): void {
+	private async renderActivity(main: HTMLElement, progress: ProgressFile): Promise<void> {
 		const now = new Date();
-		const days = dailyRecord(attempts, this.plugin.settings.targetRecall / 100, keysOf(Store.itemsOf(this.banks)), now);
+		const days = await this.dayRecord(progress, now);
 		if (!days.length) return;
 		const streak = streakOf(days);
 

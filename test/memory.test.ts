@@ -2,7 +2,8 @@ import { test } from "node:test";
 import { strict as assert } from "node:assert";
 import { Rating } from "ts-fsrs";
 import {
-	Memory, Pace, dailyRecord, dayOffset, describeWhen, endOfDay, keyOf, keysOf, planReview, ratingFor, streakOf,
+	Memory, Pace, dailyRecord, dateKey, dayOffset, describeWhen, endOfDay, keyOf, keysOf, planReview, ratingFor,
+	settledRecord, startOfDay, streakOf,
 } from "../src/memory";
 import { AnswerIndex } from "../src/history";
 import { Store } from "../src/store";
@@ -219,6 +220,36 @@ test("the streak counts clear days in a row, and today cannot break it", () => {
 	assert.deepEqual(streakOf([d(true), d(true), d(true)]), { current: 3, longest: 3, today: true });
 	assert.deepEqual(streakOf([d(true), d(true), d(false), d(false)]), { current: 0, longest: 2, today: false });
 	assert.deepEqual(streakOf([]), { current: 0, longest: 0, today: false });
+});
+
+test("a finished day is kept as it was: a new target recall does not rewrite the streak", () => {
+	// Reviewed every day when due at 90%. At 97% the same answers leave
+	// questions overdue on several past days.
+	const ids = ["q0", "q1", "q2", "q3", "q4", "q5"];
+	const keys = new Set(ids.map((id) => qkey("a", id)));
+	const history: ReturnType<typeof attempt>[] = [];
+	const memory = new Memory([], 0.9);
+	for (let d = 0; d < 100; d++) {
+		const at = new Date(2026, 6, 1 + d, 10, 0);
+		for (const id of ids) {
+			if (d > 0 && !memory.isDue(qkey("a", id), endOfDay(at))) continue;
+			const a = attempt("a", id, 100, at.toISOString());
+			history.push(a);
+			memory.apply(a);
+		}
+	}
+	const finished = <T extends { day: number }>(days: T[]) => days.filter((d) => d.day < startOfDay(NOW).getTime());
+	const at90 = settledRecord(history, 0.9, keys, NOW, {});
+	const streak90 = streakOf(finished(at90.days)).current;
+	assert.ok(streak90 > 30, `a long streak at 90% (${streak90})`);
+	assert.equal(Object.keys(at90.settle).length, finished(at90.days).length, "every finished day is handed back to keep");
+	assert.equal(at90.settle[dateKey(NOW)], undefined, "today is never kept: it is not over");
+
+	const fresh97 = streakOf(finished(dailyRecord(history, 0.97, keys, NOW))).current;
+	assert.ok(fresh97 < streak90, `worked out afresh, the higher target breaks it (${fresh97})`);
+	const kept97 = settledRecord(history, 0.97, keys, NOW, at90.settle);
+	assert.deepEqual(finished(kept97.days), finished(at90.days), "kept, the finished days stand");
+	assert.deepEqual(kept97.settle, {}, "nothing new to keep");
 });
 
 test("endOfDay is the last millisecond of the local day", () => {

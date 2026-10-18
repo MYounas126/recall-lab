@@ -133,6 +133,19 @@ export interface ProgressFile {
 	completed?: Record<string, string>;
 	/** Lab progress, keyed by lab id. */
 	labs?: Record<string, LabProgress>;
+	/**
+	 * Finished days by local date (YYYY-MM-DD), kept as first worked out so a
+	 * later change of settings cannot rewrite the streak.
+	 */
+	days?: Record<string, DayLog>;
+}
+
+/** How one finished day went. */
+export interface DayLog {
+	/** Answers given that day. */
+	answers: number;
+	/** Whether nothing was left overdue when the day ended. */
+	clear: boolean;
 }
 
 export const EMPTY_PROGRESS: ProgressFile = { version: 1, attempts: [], sessions: [], completed: {}, labs: {} };

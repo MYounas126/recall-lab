@@ -3,7 +3,7 @@ import { strict as assert } from "node:assert";
 import { KeyPress, keyAction } from "../src/keys";
 
 const press = (key: string, extra: Partial<KeyPress> = {}): KeyPress => ({
-	key, mod: false, alt: false, typing: false, onButton: false, answered: false, ...extra,
+	key, mod: false, otherMod: false, alt: false, typing: false, onButton: false, answered: false, ...extra,
 });
 
 test("number keys pick options by their place on screen", () => {
@@ -40,4 +40,7 @@ test("once answered, Enter or Space moves on and nothing else fires", () => {
 test("modified keys are left to Obsidian", () => {
 	assert.equal(keyAction(press("s", { mod: true })), null, "Cmd+S stays Obsidian's");
 	assert.equal(keyAction(press("1", { alt: true })), null);
+	assert.equal(keyAction(press("s", { otherMod: true })), null, "Ctrl+S on a Mac is not S");
+	assert.equal(keyAction(press("1", { otherMod: true })), null);
+	assert.equal(keyAction(press("Enter", { typing: true, otherMod: true })), null, "only Cmd+Enter submits from a text box");
 });

@@ -1,5 +1,5 @@
 import { createEmptyCard, fsrs, Rating, type Card, type FSRS, type Grade } from "ts-fsrs";
-import { Attempt, ExamItem, Tier, qkey } from "./types";
+import { Attempt, DayLog, ExamItem, Tier, qkey } from "./types";
 
 const DAY = 86_400_000;
 
@@ -274,6 +274,35 @@ export function dailyRecord(attempts: Attempt[], retention: number, keys: Set<st
 		day = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
 	}
 	return out;
+}
+
+/** A local calendar date as YYYY-MM-DD. */
+export function dateKey(day: Date): string {
+	const pad = (n: number) => String(n).padStart(2, "0");
+	return `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`;
+}
+
+/**
+ * The daily record with finished days frozen. Whether a day ended clear
+ * depends on the schedule, and the schedule on the target recall: worked out
+ * afresh, raising the target turns past clear days overdue and breaks a
+ * streak earned under the old one. So a finished day is worked out once and
+ * kept, and a kept day is taken as kept; only today stays live. `settle`
+ * holds the finished days not kept yet.
+ */
+export function settledRecord(
+	attempts: Attempt[], retention: number, keys: Set<string>, now: Date, kept: Record<string, DayLog>,
+): { days: DayRecord[]; settle: Record<string, DayLog> } {
+	const today = startOfDay(now).getTime();
+	const settle: Record<string, DayLog> = {};
+	const days = dailyRecord(attempts, retention, keys, now).map((d) => {
+		const key = dateKey(new Date(d.day));
+		const old = kept[key];
+		if (old) return { day: d.day, answers: old.answers, clear: old.clear };
+		if (d.day < today) settle[key] = { answers: d.answers, clear: d.clear };
+		return d;
+	});
+	return { days, settle };
 }
 
 export interface Streak {

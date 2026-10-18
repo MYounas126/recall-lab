@@ -577,3 +577,6 @@
 	max-height: 14rem; overflow: auto;
 	font-size: 0.9em; color: var(--text-muted);
 }
+
+/* The view is focusable only to keep exam shortcuts working after a click. */
+.recall-lab:focus { outline: none; }

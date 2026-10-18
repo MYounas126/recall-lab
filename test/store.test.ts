@@ -67,6 +67,17 @@ test("an unreadable attempts.json is never overwritten", async () => {
 	assert.deepEqual((await store.readProgress()).attempts, [], "reading still works, as an empty log");
 });
 
+test("a kept day is never changed", async () => {
+	const vault = makeVault(0);
+	const store = storeOn(vault);
+	await store.keepDays({ "2026-10-16": { answers: 3, clear: true } });
+	await store.keepDays({ "2026-10-16": { answers: 9, clear: false }, "2026-10-17": { answers: 1, clear: false } });
+	assert.deepEqual(JSON.parse(vault.files.get(PATH)!).days, {
+		"2026-10-16": { answers: 3, clear: true },
+		"2026-10-17": { answers: 1, clear: false },
+	});
+});
+
 test("saveCoaching reports a session that no longer exists", async () => {
 	const store = storeOn(makeVault(0));
 	await store.recordSession(session);

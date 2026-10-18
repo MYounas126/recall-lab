@@ -5,6 +5,7 @@ import {
 	Course,
 	ExamItem,
 	LabProgress,
+	DayLog,
 	EMPTY_PROGRESS,
 	ProgressFile,
 	SessionSummary,
@@ -222,6 +223,20 @@ export class Store {
 			found = true;
 		});
 		return found;
+	}
+
+	/** Keeps finished days' records. A day already kept is never changed. */
+	async keepDays(days: Record<string, DayLog>): Promise<void> {
+		await this.update((data) => {
+			data.days = data.days ?? {};
+			let added = false;
+			for (const [key, day] of Object.entries(days)) {
+				if (data.days[key]) continue;
+				data.days[key] = day;
+				added = true;
+			}
+			return added;
+		});
 	}
 
 	// ---------- exam composition ----------

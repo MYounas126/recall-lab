@@ -11,6 +11,8 @@ export interface KeyPress {
 	key: string;
 	/** Cmd on macOS, Ctrl elsewhere. */
 	mod: boolean;
+	/** Ctrl on macOS, the Windows or Super key elsewhere: never a shortcut here. */
+	otherMod: boolean;
 	alt: boolean;
 	/** Focus is in a text box, where letters and Enter belong to the text. */
 	typing: boolean;
@@ -28,7 +30,7 @@ export interface KeyPress {
  * (submit) are taken; every other key types.
  */
 export function keyAction(p: KeyPress): KeyAction | null {
-	if (p.alt) return null;
+	if (p.alt || p.otherMod) return null;
 	if (p.typing) {
 		if (p.key === "Escape") return { do: "leave-text" };
 		if (p.key === "Enter" && p.mod) return p.answered ? { do: "next" } : { do: "submit", confidence: "unsure" };
