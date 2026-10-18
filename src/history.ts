@@ -11,6 +11,8 @@ export class AnswerIndex {
 
 	constructor(attempts: Attempt[]) {
 		for (const a of attempts) {
+			// A failed marking says nothing about what you know.
+			if (a.gradedBy === "error") continue;
 			const k = qkey(a.bankId, a.questionId);
 			const list = this.byKey.get(k);
 			if (list) list.push(a);

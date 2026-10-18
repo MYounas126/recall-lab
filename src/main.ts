@@ -58,6 +58,11 @@ export default class RecallLabPlugin extends Plugin {
 		this.addSettingTab(new RecallLabSettingTab(this.app, this));
 
 		this.addCommand({ id: "open", name: "Open Recall Lab", callback: () => void this.activate() });
+		this.addCommand({
+			id: "start-review",
+			name: "Start today's review",
+			callback: async () => (await this.activate()).startReview(),
+		});
 
 		this.addCommand({
 			id: "quiz-this-note",

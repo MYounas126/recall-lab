@@ -22,6 +22,10 @@ export interface RecallLabSettings {
 	unlockBrutal: number;
 	allowOverride: boolean;
 	defaultLength: number;
+	/** Percent chance of still remembering a question when its review comes due. */
+	targetRecall: number;
+	/** Questions you have never answered that a day's reviews may introduce. */
+	newPerDay: number;
 }
 
 export const DEFAULT_SETTINGS: RecallLabSettings = {
@@ -37,6 +41,8 @@ export const DEFAULT_SETTINGS: RecallLabSettings = {
 	unlockBrutal: 80,
 	allowOverride: true,
 	defaultLength: 15,
+	targetRecall: 90,
+	newPerDay: 20,
 };
 
 export class RecallLabSettingTab extends PluginSettingTab {
@@ -123,6 +129,42 @@ export class RecallLabSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				});
 			});
+
+		new Setting(containerEl).setName("Daily review").setHeading();
+
+		new Setting(containerEl)
+			.setName("Target recall")
+			.setDesc(
+				"How likely you should be to still remember a question when it comes back for review. Higher means " +
+					"shorter gaps and more reviews; 90% is the usual balance."
+			)
+			.addSlider((s) =>
+				s
+					.setLimits(70, 97, 1)
+					.setValue(this.plugin.settings.targetRecall)
+					.setDynamicTooltip()
+					.onChange(async (v) => {
+						this.plugin.settings.targetRecall = v;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("New questions per day")
+			.setDesc(
+				"How many questions you have never answered a day's reviews may bring in. They come only from notes " +
+					"you have marked complete or already taken an exam on."
+			)
+			.addSlider((s) =>
+				s
+					.setLimits(0, 100, 5)
+					.setValue(this.plugin.settings.newPerDay)
+					.setDynamicTooltip()
+					.onChange(async (v) => {
+						this.plugin.settings.newPerDay = v;
+						await this.plugin.saveSettings();
+					})
+			);
 
 		new Setting(containerEl).setName("Progression").setHeading();
 

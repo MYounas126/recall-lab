@@ -95,8 +95,11 @@ export interface Attempt {
 	verdict: Verdict;
 	feedback: string;
 	missing: string[];
-	/** "local" = deterministic marking, "ai" = model-graded, "self" = self-reported. */
-	gradedBy: "local" | "ai" | "self";
+	/**
+	 * "local" = deterministic marking, "ai" = model-graded, "self" = self-reported,
+	 * "error" = the marking failed; kept for the record, never scheduled or scored.
+	 */
+	gradedBy: "local" | "ai" | "self" | "error";
 	ms: number;
 }
 
@@ -105,8 +108,8 @@ export interface SessionSummary {
 	ts: string;
 	bankId: string;
 	bankTitle?: string;
-	/** "mixed" for a full exam that ramps through all three levels. */
-	tier: Tier | "mixed";
+	/** "mixed" for an exam that ramps through all three levels; "review" for a spaced review. */
+	tier: Tier | "mixed" | "review";
 	asked: number;
 	meanScore: number;
 	grade: string;

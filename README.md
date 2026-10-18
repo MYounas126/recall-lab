@@ -51,6 +51,26 @@ be reached, the answer is recorded as 0 with the reason, so an exam never
 stalls. **Strictness** (lenient, normal or brutal) is set in settings and
 written into every marking request.
 
+## Daily review
+
+Every answer you give, in any exam, feeds a spaced-repetition schedule run by
+[FSRS](https://github.com/open-spaced-repetition/ts-fsrs), the scheduler Anki
+added in version 23.10. **Today's review** on the overview, or **Start today's
+review** from the command palette, asks what is due across every course, the
+questions you are closest to forgetting first, then up to a daily allowance of
+new questions. New questions only come from notes you have marked complete or
+already taken an exam on. Each course has its own review as well.
+
+A miss brings a question back the next day; each correct answer pushes it
+further out. Answers are saved as you go, so you can stop at any point. Reviews
+stay offline apart from marking written answers: feedback from Claude is one
+button away rather than automatic.
+
+**Settings → Daily review** sets the target recall (90% by default; higher
+means more frequent reviews) and how many new questions a day may bring in
+(20). The schedule itself is never stored: it is rebuilt from `attempts.json`
+each time, so it cannot drift out of step with your answer history.
+
 ## Building courses, quizzes and labs
 
 - **Set up a course.** Pick a folder in the Recall Lab sidebar and press *Set
