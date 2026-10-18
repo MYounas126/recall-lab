@@ -94,10 +94,12 @@ interface RadarOptions {
 }
 
 /**
- * Draws the skill radar as inline SVG. Colours come from Obsidian's own theme
- * variables, so it follows light and dark mode without a second stylesheet.
+ * Draws the skill radar as inline SVG into `parent`. Colours come from
+ * Obsidian's own theme variables, so it follows light and dark mode without a
+ * second stylesheet. It is built as DOM nodes, not an HTML string, so no axis
+ * label is ever parsed as markup.
  */
-export function renderRadar(scores: AxisScore[], opts: RadarOptions = {}): string {
+export function renderRadar(parent: HTMLElement, scores: AxisScore[], opts: RadarOptions = {}): void {
 	const size = opts.size ?? 440;
 	const rings = opts.rings ?? 4;
 	// Axis labels are long ("Dynamic Analysis & Instrumentation (adb, Emulator,
@@ -112,7 +114,8 @@ export function renderRadar(scores: AxisScore[], opts: RadarOptions = {}): strin
 	const n = scores.length;
 
 	if (n < 3) {
-		return `<div class="rl-radar-empty">A radar needs at least three axes; this course has ${n}.</div>`;
+		parent.createDiv({ cls: "rl-radar-empty", text: `A radar needs at least three axes; this course has ${n}.` });
+		return;
 	}
 
 	// Start at twelve o'clock and go clockwise.
@@ -121,20 +124,21 @@ export function renderRadar(scores: AxisScore[], opts: RadarOptions = {}): strin
 	const poly = (r: number) =>
 		scores.map((_, i) => pt(i, r).map((v) => v.toFixed(1)).join(",")).join(" ");
 
-	const parts: string[] = [];
-	parts.push(
-		`<svg class="rl-radar" viewBox="0 0 ${w} ${h}" width="100%" role="img" aria-label="Skill radar">`
-	);
+	const svg = parent.createSvg("svg", {
+		cls: "rl-radar",
+		attr: { viewBox: `0 0 ${w} ${h}`, width: "100%", role: "img", "aria-label": "Skill radar" },
+	});
 
 	// Grid rings and spokes.
 	for (let r = 1; r <= rings; r++) {
-		parts.push(
-			`<polygon class="rl-radar-ring" points="${poly((radius * r) / rings)}" />`
-		);
+		svg.createSvg("polygon", { cls: "rl-radar-ring", attr: { points: poly((radius * r) / rings) } });
 	}
 	for (let i = 0; i < n; i++) {
 		const [x, y] = pt(i, radius);
-		parts.push(`<line class="rl-radar-spoke" x1="${cx}" y1="${cy}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" />`);
+		svg.createSvg("line", {
+			cls: "rl-radar-spoke",
+			attr: { x1: cx, y1: cy, x2: x.toFixed(1), y2: y.toFixed(1) },
+		});
 	}
 
 	// The shape itself.
@@ -144,7 +148,7 @@ export function renderRadar(scores: AxisScore[], opts: RadarOptions = {}): strin
 			return pt(i, r).map((v) => v.toFixed(1)).join(",");
 		})
 		.join(" ");
-	parts.push(`<polygon class="rl-radar-shape" points="${shape}" />`);
+	svg.createSvg("polygon", { cls: "rl-radar-shape", attr: { points: shape } });
 
 	// Vertex dots, so a zero axis is still visible. Untested axes are hollow, to
 	// separate "you got these wrong" from "you have not been asked yet".
@@ -152,7 +156,7 @@ export function renderRadar(scores: AxisScore[], opts: RadarOptions = {}): strin
 		const r = (radius * Math.max(0, Math.min(100, s.score))) / 100;
 		const [x, y] = pt(i, r);
 		const cls = s.seen === 0 ? "rl-radar-dot rl-radar-dot-untested" : "rl-radar-dot";
-		parts.push(`<circle class="${cls}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5" />`);
+		svg.createSvg("circle", { cls, attr: { cx: x.toFixed(1), cy: y.toFixed(1), r: 3.5 } });
 	});
 
 	// Labels, wrapped and anchored so they never overlap the wheel or the edge.
@@ -176,21 +180,16 @@ export function renderRadar(scores: AxisScore[], opts: RadarOptions = {}): strin
 		else top = y - block / 2 + LINE;
 
 		lines.forEach((line, k) => {
-			parts.push(
-				`<text class="rl-radar-label" x="${x.toFixed(1)}" y="${(top + k * LINE).toFixed(
-					1
-				)}" text-anchor="${anchor}">${escapeXml(line)}</text>`
-			);
+			svg.createSvg("text", {
+				cls: "rl-radar-label",
+				attr: { x: x.toFixed(1), y: (top + k * LINE).toFixed(1), "text-anchor": anchor },
+			}).textContent = line;
 		});
-		parts.push(
-			`<text class="rl-radar-value" x="${x.toFixed(1)}" y="${(top + lines.length * LINE).toFixed(
-				1
-			)}" text-anchor="${anchor}">${sub}</text>`
-		);
+		svg.createSvg("text", {
+			cls: "rl-radar-value",
+			attr: { x: x.toFixed(1), y: (top + lines.length * LINE).toFixed(1), "text-anchor": anchor },
+		}).textContent = sub;
 	});
-
-	parts.push("</svg>");
-	return parts.join("");
 }
 
 /** Greedy word wrap, so a long axis name becomes two or three short lines. */
@@ -216,10 +215,4 @@ export function wrapLabel(text: string, maxChars: number): string[] {
 		return kept;
 	}
 	return lines;
-}
-
-function escapeXml(s: string): string {
-	return s.replace(/[<>&"']/g, (c) =>
-		({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;" })[c] as string
-	);
 }

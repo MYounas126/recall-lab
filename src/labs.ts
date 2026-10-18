@@ -32,7 +32,7 @@ export function validateLab(lab: Lab): string | null {
 		if (!f.path || typeof f.content !== "string") return "a lab file is malformed";
 		// Nothing may escape the lab's own directory.
 		const clean = f.path.replace(/\\/g, "/");
-		if (clean.startsWith("/") || clean.split("/").includes("..")) {
+		if (clean.startsWith("/") || /^[a-z]:/i.test(clean) || clean.split("/").includes("..")) {
 			return `lab file path "${f.path}" tries to escape the workspace`;
 		}
 	}
@@ -149,9 +149,10 @@ export function detectToolchain(): Toolchain {
 	if (cached) return cached;
 	const found: string[] = [];
 	const missing: string[] = [];
+	const which = process.platform === "win32" ? "where.exe" : "/usr/bin/which";
 	for (const tool of PROBE) {
 		try {
-			execFileSync("/usr/bin/which", [tool], { stdio: ["ignore", "pipe", "ignore"] });
+			execFileSync(which, [tool], { stdio: ["ignore", "pipe", "ignore"] });
 			found.push(tool);
 		} catch {
 			missing.push(tool);

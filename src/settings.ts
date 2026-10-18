@@ -1,5 +1,6 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type RecallLabPlugin from "./main";
+import { INSTALL_HINT } from "./claude";
 
 export type Strictness = "lenient" | "normal" | "brutal";
 
@@ -97,7 +98,7 @@ export class RecallLabSettingTab extends PluginSettingTab {
 					b.setDisabled(true).setButtonText("Testing…");
 					const where = await this.plugin.cli.locate();
 					if (!where) {
-						new Notice("Claude CLI not found. Install it with:\nnpm install -g @anthropic-ai/claude-code", 12000);
+						new Notice(`Claude CLI not found. ${INSTALL_HINT}`, 12000);
 					} else {
 						const r = await this.plugin.cli.ask('Reply with exactly: OK', 60000);
 						new Notice(r.ok ? `Connected — ${where}` : `Found ${where} but it failed: ${r.error}`, 10000);
@@ -197,6 +198,6 @@ export class RecallLabSettingTab extends PluginSettingTab {
 
 		folder("Banks", "Question bank JSON files.", "banksFolder");
 		folder("Courses", "Course definitions — the folder each course covers, and its skill axes.", "coursesFolder");
-		folder("Progress", "attempts.json and the generated gradebook.", "progressFolder");
+		folder("Progress", "attempts.json (every answer, exam and lab result) and recall-lab.log.", "progressFolder");
 	}
 }

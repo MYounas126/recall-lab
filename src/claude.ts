@@ -9,14 +9,28 @@ export interface ClaudeReply {
 	costUsd?: number;
 }
 
-const CANDIDATES = [
-	"/opt/homebrew/bin/claude",
-	"/usr/local/bin/claude",
-	"/usr/bin/claude",
-	`${os.homedir()}/.local/bin/claude`,
-	`${os.homedir()}/.claude/local/claude`,
-	`${os.homedir()}/.bun/bin/claude`,
-];
+const WINDOWS = process.platform === "win32";
+
+const CANDIDATES = WINDOWS
+	? [`${os.homedir()}\\.local\\bin\\claude.exe`]
+	: [
+		"/opt/homebrew/bin/claude",
+		"/usr/local/bin/claude",
+		"/usr/bin/claude",
+		`${os.homedir()}/.local/bin/claude`,
+		`${os.homedir()}/.claude/local/claude`,
+		`${os.homedir()}/.bun/bin/claude`,
+	];
+
+/**
+ * How to get the CLI, for every message that says it is missing. On Windows
+ * an npm install gives only claude.cmd, which cannot be spawned without a
+ * shell, so only the native installer's claude.exe works.
+ */
+export const INSTALL_HINT = WINDOWS
+	? "Install Claude Code with its native installer, then set the path to claude.exe in Recall Lab settings. " +
+		"An npm install only provides claude.cmd, which Recall Lab cannot start."
+	: "Install it with: npm install -g @anthropic-ai/claude-code";
 
 /**
  * Runs the Claude Code CLI headlessly, as the signed-in user. No API key: the
@@ -49,11 +63,16 @@ export class ClaudeCli {
 				return path;
 			}
 		}
-		// A GUI app does not inherit the shell PATH, so ask a login shell.
+		// A GUI app does not inherit the shell PATH, so ask a login shell. On
+		// Windows there is no login shell; where.exe reads the real PATH.
 		try {
-			const shell = process.env.SHELL || "/bin/zsh";
-			const found = await this.run(shell, ["-lc", "command -v claude"], "", 15000);
-			const path = found.stdout.trim().split("\n").pop()?.trim();
+			const found = WINDOWS
+				? await this.run("where.exe", ["claude"], "", 15000)
+				: await this.run(process.env.SHELL || "/bin/zsh", ["-lc", "command -v claude"], "", 15000);
+			const hits = found.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+			// where.exe also lists an npm install's claude.cmd, which cannot be
+			// spawned without a shell, so only an .exe counts there.
+			const path = WINDOWS ? hits.find((h) => /\.exe$/i.test(h)) : hits.pop();
 			if (path && (await this.works(path))) {
 				this.resolved = path;
 				this.onLog("info", "found the Claude CLI via the login shell", { path });
@@ -86,7 +105,7 @@ export class ClaudeCli {
 	async ask(prompt: string, timeoutMs = 300000): Promise<ClaudeReply> {
 		const bin = await this.locate();
 		if (!bin) {
-			return { ok: false, text: "", error: "The Claude Code CLI was not found. Install it with: npm install -g @anthropic-ai/claude-code" };
+			return { ok: false, text: "", error: `The Claude Code CLI was not found. ${INSTALL_HINT}` };
 		}
 
 		const args = [
@@ -159,7 +178,10 @@ export class ClaudeCli {
 				child = spawn(cmd, args, {
 					env: {
 						...process.env,
-						PATH: `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${process.env.PATH ?? ""}`,
+						// The usual install dirs, which a GUI app's PATH lacks. Not on
+						// Windows: its separator is ";", so this prefix would corrupt
+						// the first real PATH entry.
+						...(WINDOWS ? {} : { PATH: `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${process.env.PATH ?? ""}` }),
 					},
 				});
 			} catch (e) { reject(e); return; }
@@ -186,10 +208,29 @@ function stripFence(s: string): string {
 /** Pulls the outermost JSON object or array out of a reply. */
 export function extractJson(s: string): string | null {
 	const text = stripFence(s).trim();
-	for (const [open, close] of [["{", "}"], ["[", "]"]] as const) {
+	const span = (open: string, close: string) => {
 		const start = text.indexOf(open);
 		const end = text.lastIndexOf(close);
-		if (start !== -1 && end > start) return text.slice(start, end + 1);
+		return start !== -1 && end > start ? { start, end } : null;
+	};
+	const slice = (r: { start: number; end: number }) => text.slice(r.start, r.end + 1);
+	const obj = span("{", "}");
+	const arr = span("[", "]");
+
+	// A top-level array of objects encloses the object span, and slicing from
+	// its first `{` to its last `}` drops the brackets, leaving `{…},{…}` that
+	// cannot parse. The array wins only when it encloses the object and is
+	// valid itself, so a stray "[1]" in prose before an object reply does not
+	// hijack it.
+	if (arr && (!obj || (arr.start < obj.start && arr.end > obj.end && parses(slice(arr))))) return slice(arr);
+	return obj ? slice(obj) : null;
+}
+
+function parses(s: string): boolean {
+	try {
+		JSON.parse(s);
+		return true;
+	} catch {
+		return false;
 	}
-	return null;
 }

@@ -98,7 +98,7 @@ export interface SessionSummary {
 	weakTopics: string[];
 	/** Claude's end-of-session coaching, once it has come back. */
 	coaching?: string;
-	/** True while the coaching request is sitting in the queue. */
+	/** True until Claude's coaching comes back. */
 	coachingPending?: boolean;
 }
 

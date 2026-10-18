@@ -6,6 +6,13 @@ import { shuffled } from "./util";
 import { renderRadar, scoreAxes, scoreCourses, weakestTested, untested, AxisScore } from "./radar";
 import { Attempt, Bank, Course, Lab, LabProgress, Question, SessionSummary, Tier, labScore, letterGrade } from "./types";
 import { checkFlag } from "./labs";
+import { INSTALL_HINT } from "./claude";
+
+// Rough per-quiz figures for the bulk-generation dialog. Illustrative only:
+// they drift with the model, the note's length and plan pricing, which is why
+// the dialog says "about" and "roughly".
+const SECONDS_PER_QUIZ = 50;
+const USD_PER_QUIZ = 0.13;
 
 export const VIEW_TYPE_RECALL = "recall-lab-view";
 
@@ -23,7 +30,6 @@ interface LiveAnswer {
 	response: string;
 	image?: string;
 	attempt?: Attempt;
-	pendingId?: string;
 	ms: number;
 }
 
@@ -61,9 +67,21 @@ export class RecallLabView extends ItemView {
 		await this.render();
 	}
 
-	/** Entry point used by "Quiz me on this note" and the note footer button. */
-	/** Redraws from disk — used after the plugin writes new banks or courses. */
+	/**
+	 * True while an exam or a lab is on screen. A redraw there rebuilds the
+	 * question and throws away what was typed — and after Submit it leaves a
+	 * dead button — so background work must not trigger one.
+	 */
+	get occupied(): boolean {
+		return this.screen === "exam" || this.screen === "lab";
+	}
+
+	/**
+	 * Redraws from disk — used after the plugin writes new banks or courses.
+	 * Skipped while occupied; the next screen change reads from disk anyway.
+	 */
 	async rerender(): Promise<void> {
+		if (this.occupied) return;
 		await this.render();
 	}
 
@@ -202,7 +220,7 @@ export class RecallLabView extends ItemView {
 		ph.createEl("h3", { text: "Across the whole vault" });
 		ph.createSpan({ cls: "rl-grade-pill", text: `${overall}% · ${letterGrade(overall)}` });
 		if (scores.length >= 3) {
-			panel.createDiv({ cls: "rl-radar-wrap" }).innerHTML = renderRadar(scores);
+			renderRadar(panel.createDiv({ cls: "rl-radar-wrap" }), scores);
 		} else {
 			panel.createDiv({ cls: "rl-muted", text: `A radar needs three courses; you have ${scores.length}. Set up more folders and it appears here.` });
 		}
@@ -264,7 +282,7 @@ export class RecallLabView extends ItemView {
 		new ButtonComponent(badge).setButtonText("How to fix").onClick(() => {
 			new Notice(
 				"Recall Lab runs Claude through the Claude Code CLI on your own subscription.\n\n" +
-					"Install it in Terminal:\n  npm install -g @anthropic-ai/claude-code\n\n" +
+					`${INSTALL_HINT}\n\n` +
 					"Then reopen this tab. If it is installed but still not found, set its path in Recall Lab settings.",
 				20000
 			);
@@ -307,7 +325,7 @@ export class RecallLabView extends ItemView {
 		const ph = panel.createDiv({ cls: "rl-panel-head" });
 		ph.createEl("h3", { text: "Skill radar" });
 		ph.createSpan({ cls: "rl-grade-pill", text: `${overall}% · ${letterGrade(overall)}` });
-		panel.createDiv({ cls: "rl-radar-wrap" }).innerHTML = renderRadar(scores);
+		renderRadar(panel.createDiv({ cls: "rl-radar-wrap" }), scores);
 		this.renderLegend(panel, scores);
 		const weakest = weakestTested(scores);
 		const notYet = untested(scores);
@@ -340,8 +358,8 @@ export class RecallLabView extends ItemView {
 		}
 		const missing = this.plugin.store.notesWithoutBank(course, this.banks).length;
 		if (missing) {
-			const mins = Math.ceil((missing * 50) / 60);
-			const cost = (missing * 0.13).toFixed(2);
+			const mins = Math.ceil((missing * SECONDS_PER_QUIZ) / 60);
+			const cost = (missing * USD_PER_QUIZ).toFixed(2);
 			new ButtonComponent(ea)
 				.setButtonText(`Generate all ${missing} missing quizzes…`)
 				.onClick(() => {
@@ -458,7 +476,7 @@ export class RecallLabView extends ItemView {
 					.setTooltip("Rebuild this quiz from the note, replacing the current questions")
 					.onClick(async () => {
 						await this.plugin.requestNoteQuiz(path);
-						await this.revealNote(path);
+						if (!this.occupied) await this.revealNote(path);
 					});
 			} else {
 				right.createSpan({ cls: "rl-chip rl-chip-dim", text: "no quiz" });
@@ -531,7 +549,7 @@ export class RecallLabView extends ItemView {
 		const quit = bar.createEl("a", { cls: "rl-link rl-quit", text: "End exam" });
 		quit.onclick = (e) => { e.preventDefault(); void this.finish(); };
 		const track = bar.createDiv({ cls: "rl-progress rl-progress-slim" });
-		track.createDiv({ cls: "rl-progress-fill" }).style.width = `${(this.index / this.examQuestions.length) * 100}%`;
+		track.createDiv({ cls: "rl-progress-fill" }).setCssProps({ "--rl-fill": `${(this.index / this.examQuestions.length) * 100}%` });
 
 		const card = wrap.createDiv({ cls: "rl-question" });
 		const meta = card.createDiv({ cls: "rl-qmeta" });
@@ -767,14 +785,10 @@ export class RecallLabView extends ItemView {
 			axes: axes.map((a) => ({ label: a.axis.label, score: a.score })),
 		});
 
-		const data = await this.plugin.store.readProgress();
-		const stored = data.sessions.find((x) => x.id === summary.id);
-		if (!stored) return;
-		stored.coachingPending = false;
 		if (typeof res === "string") this.plugin.log.info("feedback received", { chars: res.length });
 		else this.plugin.log.error("feedback failed", { error: res.error });
-		stored.coaching = typeof res === "string" ? res : `Could not reach Claude for feedback: ${res.error}`;
-		await this.plugin.store.writeProgress(data);
+		const coaching = typeof res === "string" ? res : `Could not reach Claude for feedback: ${res.error}`;
+		if (!(await this.plugin.store.saveCoaching(summary.id, coaching))) return;
 		if (this.screen === "results" && this.sessionId === summary.id) await this.render();
 	}
 
@@ -1024,7 +1038,7 @@ export class RecallLabView extends ItemView {
 				row.createSpan({ cls: "rl-bar-label", text: w.topic });
 				const track = row.createDiv({ cls: "rl-progress" });
 				const fill = track.createDiv({ cls: "rl-progress-fill" });
-				fill.style.width = `${w.score}%`;
+				fill.setCssProps({ "--rl-fill": `${w.score}%` });
 				if (w.score < 50) fill.addClass("rl-fill-bad");
 				else if (w.score < 80) fill.addClass("rl-fill-mid");
 				row.createSpan({ cls: "rl-bar-value", text: `${w.score}% · ${w.n}` });
@@ -1042,12 +1056,11 @@ export class RecallLabView extends ItemView {
 			mid.createDiv({ cls: "rl-session-meta", text: `${new Date(s.ts).toLocaleString()} · ${s.asked} questions · ${s.meanScore}%` });
 			if (s.coaching) {
 				const toggle = top.createEl("a", { cls: "rl-link", text: "Feedback" });
-				const body = row.createDiv({ cls: "rl-session-coaching" });
-				body.style.display = "none";
+				const body = row.createDiv({ cls: "rl-session-coaching rl-collapsed" });
 				void this.md(s.coaching, body);
-				toggle.onclick = (e) => { e.preventDefault(); body.style.display = body.style.display === "none" ? "" : "none"; };
+				toggle.onclick = (e) => { e.preventDefault(); body.toggleClass("rl-collapsed", !body.hasClass("rl-collapsed")); };
 			} else if (s.coachingPending) {
-				top.createSpan({ cls: "rl-chip rl-chip-dim", text: "feedback queued" });
+				top.createSpan({ cls: "rl-chip rl-chip-dim", text: "feedback pending" });
 			}
 			if (s.weakTopics.length) {
 				const chips = row.createDiv({ cls: "rl-session-chips" });
@@ -1061,14 +1074,16 @@ export class RecallLabView extends ItemView {
 	}
 }
 
-/** A plain yes/no dialog, used before anything slow or costly. */
-class ConfirmModal extends Modal {
+/** A plain yes/no dialog, used before anything slow, costly or destructive. */
+export class ConfirmModal extends Modal {
 	constructor(
 		app: App,
 		private title: string,
 		private body: string,
 		private confirmText: string,
-		private onConfirm: () => void
+		private onConfirm: () => void,
+		/** Listed under the body, e.g. the files about to be removed. */
+		private items: string[] = []
 	) {
 		super(app);
 	}
@@ -1076,6 +1091,10 @@ class ConfirmModal extends Modal {
 	onOpen(): void {
 		this.contentEl.createEl("h3", { text: this.title });
 		this.contentEl.createEl("p", { text: this.body });
+		if (this.items.length) {
+			const list = this.contentEl.createEl("ul", { cls: "rl-confirm-list" });
+			for (const item of this.items) list.createEl("li", { text: item });
+		}
 		const row = this.contentEl.createDiv({ cls: "rl-actions" });
 		new ButtonComponent(row).setButtonText(this.confirmText).setCta()
 			.onClick(() => { this.close(); this.onConfirm(); });

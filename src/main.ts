@@ -1,12 +1,13 @@
-import { MarkdownView, Notice, Plugin, TFile, WorkspaceLeaf } from "obsidian";
+import { MarkdownView, Notice, Plugin, TFile, TFolder, WorkspaceLeaf, normalizePath } from "obsidian";
 import { DEFAULT_SETTINGS, RecallLabSettingTab, RecallLabSettings } from "./settings";
 import { Store } from "./store";
 import { ClaudeCli } from "./claude";
 import { Tasks } from "./tasks";
 import { LabStore } from "./labs";
 import { Log } from "./log";
-import { RecallLabView, VIEW_TYPE_RECALL } from "./view";
+import { ConfirmModal, RecallLabView, VIEW_TYPE_RECALL } from "./view";
 import { Course } from "./types";
+import { SerialQueue } from "./util";
 
 export default class RecallLabPlugin extends Plugin {
 	settings!: RecallLabSettings;
@@ -17,6 +18,15 @@ export default class RecallLabPlugin extends Plugin {
 	private bulkRun: { cancelled: boolean } | null = null;
 	tasks!: Tasks;
 	labs!: LabStore;
+	/**
+	 * Quiz, lab and course builds run one at a time, in the order asked for.
+	 * Each is a Claude CLI process that can take minutes, so ten clicks must
+	 * not mean ten of them at once.
+	 */
+	private generation = new SerialQueue();
+	/** What is queued or building, keyed like "quiz:<note path>". */
+	private building = new Set<string>();
+	private unloaded = false;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -42,7 +52,6 @@ export default class RecallLabPlugin extends Plugin {
 			() => this.settings.coursesFolder,
 			() => this.settings.labsFolder
 		);
-		this.labs = new LabStore(this.app, () => this.settings.labsFolder, () => this.settings.labWorkspace);
 
 		this.registerView(VIEW_TYPE_RECALL, (leaf: WorkspaceLeaf) => new RecallLabView(leaf, this));
 		this.addRibbonIcon("graduation-cap", "Recall Lab", () => void this.activate());
@@ -85,6 +94,7 @@ export default class RecallLabPlugin extends Plugin {
 				new Notice("Will stop after the quiz currently in flight.", 8000);
 			},
 		});
+		this.addCommand({ id: "remove-leftovers", name: "Remove leftover quizzes, labs and courses", callback: () => void this.removeLeftovers() });
 
 		// The "Complete" footer at the bottom of every note inside a course folder.
 		this.registerEvent(this.app.workspace.on("file-open", () => this.queueFooters()));
@@ -103,6 +113,8 @@ export default class RecallLabPlugin extends Plugin {
 	onunload(): void {
 		// A bulk run must not outlive the plugin. Without this it kept going
 		// after a reload, with no way to stop it short of quitting Obsidian.
+		// Builds still waiting in the queue are dropped for the same reason.
+		this.unloaded = true;
 		this.cancelBulk();
 		document.querySelectorAll(".rl-note-footer").forEach((el) => el.remove());
 	}
@@ -136,7 +148,9 @@ export default class RecallLabPlugin extends Plugin {
 		const view = await this.activate();
 		if (bank) { await view.startBankById(bank.id); return; }
 		const id = await this.requestNoteQuiz(file.path);
-		if (id) await view.startBankById(id);
+		// The build takes minutes. If an exam or lab was opened meanwhile, the
+		// new quiz waits in the list rather than replacing it.
+		if (id && !view.occupied) await view.startBankById(id);
 	}
 
 	// ------------------------------------------------------- note footer
@@ -216,7 +230,7 @@ export default class RecallLabPlugin extends Plugin {
 
 		if (!(await this.store.bankForNote(path))) {
 			await this.requestNoteQuiz(path, true);
-			await view.revealNote(path);
+			if (!view.occupied) await view.revealNote(path);
 		}
 		void this.renderFooters();
 	}
@@ -232,10 +246,16 @@ export default class RecallLabPlugin extends Plugin {
 			return null;
 		}
 		const name = path.split("/").pop()!.replace(/\.md$/, "");
-		this.log.info("building a quiz", { note: path, course: course.id, practical });
-		const notice = new Notice(`Building a quiz for "${name}"…`, 0);
-		const res = await this.tasks.generateBank(path, course, practical);
-		notice.hide();
+		const res = await this.build(`quiz:${path}`, `quiz for "${name}"`, async () => {
+			this.log.info("building a quiz", { note: path, course: course.id, practical });
+			const notice = new Notice(`Building a quiz for "${name}"…`, 0);
+			try {
+				return await this.tasks.generateBank(path, course, practical);
+			} finally {
+				notice.hide();
+			}
+		});
+		if (!res) return null;
 		if ("error" in res) {
 			this.log.error("quiz build failed", { note: path, error: res.error });
 			new Notice(`Could not build that quiz: ${res.error}`, 15000);
@@ -243,10 +263,11 @@ export default class RecallLabPlugin extends Plugin {
 		}
 		this.log.info("quiz built", { note: path, id: res.id, questions: res.questions.length });
 		new Notice(`Built ${res.questions.length} questions for "${name}".`, 7000);
+		// So the note's row stops saying "no quiz" without a manual redraw.
+		await this.refreshView();
 		return res.id;
 	}
 
-	/** Builds every missing quiz in a course, one note at a time. */
 	/** Builds hands-on labs for one note. */
 	async buildLabs(notePath: string, count = 3): Promise<number> {
 		const courses = await this.store.listCourses();
@@ -254,10 +275,16 @@ export default class RecallLabPlugin extends Plugin {
 		if (!course) { new Notice("That note is not inside a course folder."); return 0; }
 
 		const name = notePath.split("/").pop()!.replace(/\.md$/, "");
-		this.log.info("building labs", { note: notePath, count });
-		const notice = new Notice(`Writing ${count} labs for "${name}"… this takes a couple of minutes.`, 0);
-		const res = await this.tasks.generateLabs(notePath, course, count);
-		notice.hide();
+		const res = await this.build(`labs:${notePath}`, `labs for "${name}"`, async () => {
+			this.log.info("building labs", { note: notePath, count });
+			const notice = new Notice(`Writing ${count} labs for "${name}"… this takes a couple of minutes.`, 0);
+			try {
+				return await this.tasks.generateLabs(notePath, course, count);
+			} finally {
+				notice.hide();
+			}
+		});
+		if (!res) return 0;
 
 		if ("error" in res) {
 			this.log.error("lab build failed", { note: notePath, error: res.error });
@@ -271,6 +298,7 @@ export default class RecallLabPlugin extends Plugin {
 		return res.length;
 	}
 
+	/** Builds every missing quiz in a course, one note at a time. */
 	async scanForMissingBanks(only?: Course): Promise<void> {
 		const courses = only ? [only] : await this.store.listCourses();
 		if (!courses.length) { new Notice("No courses set up yet."); return; }
@@ -290,16 +318,23 @@ export default class RecallLabPlugin extends Plugin {
 		const body = notice.noticeEl;
 		body.empty();
 		const text = body.createDiv({ text: `Building quizzes: 0 / ${todo.length}…` });
-		const stop = body.createEl("button", { text: "Stop", cls: "rl-footer-btn" });
-		stop.style.marginTop = "0.5rem";
+		const stop = body.createEl("button", { text: "Stop", cls: "rl-footer-btn rl-notice-stop" });
 		stop.onclick = () => { this.cancelBulk(); text.setText("Stopping after this quiz…"); };
 
-		let built = 0, failed = 0, spent = 0;
+		let built = 0, failed = 0;
 		for (const [i, item] of todo.entries()) {
 			if (run.cancelled) break;
+			// Queued or built by hand since the run started: not built twice.
+			const key = `quiz:${item.path}`;
+			if (this.building.has(key) || (await this.store.bankForNote(item.path))) continue;
 			text.setText(`Building quizzes: ${i + 1} / ${todo.length} — ${item.path.split("/").pop()}`);
-			const res = await this.tasks.generateBank(item.path, item.course, false);
-			if (run.cancelled) break;
+			// Through the same queue as single builds, so one asked for by hand
+			// mid-run goes next instead of running alongside.
+			this.building.add(key);
+			const res = await this.generation
+				.run(async () => (run.cancelled ? null : this.tasks.generateBank(item.path, item.course, false)))
+				.finally(() => this.building.delete(key));
+			if (run.cancelled || !res) break;
 			if ("error" in res) {
 				failed += 1;
 				this.log.error("quiz build failed", { note: item.path, error: res.error });
@@ -321,24 +356,113 @@ export default class RecallLabPlugin extends Plugin {
 		await this.refreshView();
 	}
 
-	/** Works out a folder's skill areas and then builds all its quizzes. */
+	/** Works out a folder's skill areas. Its quizzes are built note by note afterwards. */
 	async requestCourseSetup(folder: string): Promise<void> {
-		this.log.info("setting up a course", { folder });
-		const notice = new Notice(`Working out the skill areas for "${folder}"…`, 0);
-		const res = await this.tasks.generateCourse(folder);
+		const res = await this.build(`course:${folder}`, `course setup for "${folder}"`, async () => {
+			this.log.info("setting up a course", { folder });
+			const notice = new Notice(`Working out the skill areas for "${folder}"…`, 0);
+			try {
+				return await this.tasks.generateCourse(folder);
+			} finally {
+				notice.hide();
+			}
+		});
+		if (!res) return;
 		if ("error" in res) {
-			notice.hide();
 			this.log.error("course setup failed", { folder, error: res.error });
 			new Notice(`Could not set that up: ${res.error}`, 15000);
 			return;
 		}
-		notice.hide();
 		this.log.info("course set up", { id: res.id, axes: res.axes.length });
 		new Notice(
 			`${res.title} is set up with ${res.axes.length} skill areas. Generate quizzes note by note, as you finish each one.`,
 			10000
 		);
 		await this.refreshView();
+	}
+
+	/**
+	 * Runs one build through the generation queue. Asking for something already
+	 * queued or building does nothing rather than build it twice, and a build
+	 * still waiting when the plugin unloads never starts. Resolves to null when
+	 * it did not run.
+	 */
+	private async build<T>(key: string, what: string, job: () => Promise<T>): Promise<T | null> {
+		if (this.building.has(key)) {
+			new Notice(`Already queued or building: ${what}.`);
+			return null;
+		}
+		if (this.generation.busy) new Notice(`Queued behind the build in progress: ${what}.`, 6000);
+		this.building.add(key);
+		try {
+			return await this.generation.run(async () => (this.unloaded ? null : job()));
+		} finally {
+			this.building.delete(key);
+		}
+	}
+
+	/**
+	 * Quizzes and labs point at their note by path, and courses at their folder,
+	 * so deleting or renaming one leaves them behind. Lists those and, once
+	 * confirmed, moves them to the trash — recoverable, never a hard delete.
+	 */
+	async removeLeftovers(): Promise<void> {
+		const { vault } = this.app;
+		const found: { file: TFile; target: string }[] = [];
+		const scan = async (folder: string, field: "note" | "folder", isFolder: boolean) => {
+			const prefix = normalizePath(folder) + "/";
+			for (const file of vault.getFiles()) {
+				if (!file.path.startsWith(prefix) || file.extension !== "json") continue;
+				let target: unknown;
+				try {
+					target = (JSON.parse(await vault.cachedRead(file)) as Record<string, unknown>)[field];
+				} catch {
+					continue; // unreadable: not this command's call to make
+				}
+				// A bank with no note at all is hand-made and standalone, not a leftover.
+				if (typeof target !== "string" || !target) continue;
+				const live = vault.getAbstractFileByPath(normalizePath(target));
+				if (!(isFolder ? live instanceof TFolder : live instanceof TFile)) found.push({ file, target });
+			}
+		};
+		await scan(this.settings.banksFolder, "note", false);
+		await scan(this.settings.labsFolder, "note", false);
+		await scan(this.settings.coursesFolder, "folder", true);
+
+		if (!found.length) {
+			new Notice("Nothing to remove: every quiz, lab and course still has its note or folder.");
+			return;
+		}
+		new ConfirmModal(
+			this.app,
+			`Remove ${found.length} leftover file${found.length === 1 ? "" : "s"}?`,
+			"Each points at a note or folder that no longer exists. They go to the trash, so they can be " +
+				"restored, and your answer history is kept.",
+			"Move to trash",
+			() => void this.trash(found.map((f) => f.file)),
+			found.map((f) => `${f.file.name} — was for ${f.target}`)
+		).open();
+	}
+
+	private async trash(files: TFile[]): Promise<void> {
+		let moved = 0;
+		try {
+			for (const file of files) {
+				// trashFile (Obsidian 1.6.6+) honours the "Deleted files" setting;
+				// older versions fall back to the system trash.
+				if (typeof this.app.fileManager.trashFile === "function") await this.app.fileManager.trashFile(file);
+				else await this.app.vault.trash(file, true);
+				moved += 1;
+			}
+		} catch (e) {
+			this.log.error("removing leftovers failed", { moved, error: String(e) });
+			new Notice(`Moved ${moved} of ${files.length} to the trash, then failed: ${String(e)}`, 12000);
+			return;
+		} finally {
+			await this.refreshView();
+		}
+		this.log.info("removed leftovers", { files: moved });
+		new Notice(`Moved ${moved} file${moved === 1 ? "" : "s"} to the trash.`);
 	}
 
 	/** Writes a full health report to the log and shows the headline. */

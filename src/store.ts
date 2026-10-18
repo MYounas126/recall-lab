@@ -12,10 +12,13 @@ import {
 	TIERS,
 	letterGrade,
 } from "./types";
-import { shuffled } from "./util";
+import { SerialQueue, shuffled } from "./util";
 
-/** Reads banks, persists attempts, and regenerates the human-readable gradebook. */
+/** Reads banks and courses, and persists attempts, sessions and lab progress. */
 export class Store {
+	/** Every change to attempts.json goes through this, one at a time. */
+	private writes = new SerialQueue();
+
 	constructor(
 		private app: App,
 		private banksFolder: () => string,
@@ -127,21 +130,27 @@ export class Store {
 
 	async readProgress(): Promise<ProgressFile> {
 		const file = this.vault.getAbstractFileByPath(this.progressPath());
-		if (!(file instanceof TFile)) return { ...EMPTY_PROGRESS, attempts: [], sessions: [] };
+		if (!(file instanceof TFile)) return freshProgress();
 		try {
-			const parsed = JSON.parse(await this.vault.read(file)) as ProgressFile;
+			const parsed = JSON.parse(await this.vault.read(file)) as Partial<ProgressFile>;
+			// Every field is carried through, not just the ones read here: a
+			// field dropped on read is erased by the next write. Completed notes
+			// and lab progress were lost exactly that way.
 			return {
+				...parsed,
 				version: 1,
 				attempts: parsed.attempts ?? [],
 				sessions: parsed.sessions ?? [],
+				completed: parsed.completed ?? {},
+				labs: parsed.labs ?? {},
 			};
 		} catch (e) {
 			console.error("Recall Lab: attempts.json is corrupt, starting a fresh log", e);
-			return { ...EMPTY_PROGRESS, attempts: [], sessions: [] };
+			return freshProgress();
 		}
 	}
 
-	async writeProgress(data: ProgressFile): Promise<void> {
+	private async writeProgress(data: ProgressFile): Promise<void> {
 		await this.ensureFolder(this.progressFolder());
 		const path = this.progressPath();
 		const body = JSON.stringify(data, null, 2);
@@ -150,12 +159,39 @@ export class Store {
 		else await this.vault.create(path, body);
 	}
 
+	/**
+	 * Reads attempts.json, applies one change and writes it back. Each change
+	 * awaits between its read and its write, so two run side by side would read
+	 * the same snapshot and the later write would silently drop the earlier
+	 * change — coaching landing while a lab is solved, say. The queue runs them
+	 * one at a time. A change that returns false skips the write.
+	 */
+	private update(change: (data: ProgressFile) => boolean | void): Promise<ProgressFile> {
+		return this.writes.run(async () => {
+			const data = await this.readProgress();
+			if (change(data) !== false) await this.writeProgress(data);
+			return data;
+		});
+	}
+
 	async recordSession(attempts: Attempt[], summary: SessionSummary): Promise<ProgressFile> {
-		const data = await this.readProgress();
-		data.attempts.push(...attempts);
-		data.sessions.push(summary);
-		await this.writeProgress(data);
-		return data;
+		return this.update((data) => {
+			data.attempts.push(...attempts);
+			data.sessions.push(summary);
+		});
+	}
+
+	/** Stores a session's coaching once it lands. False if the session is gone. */
+	async saveCoaching(sessionId: string, coaching: string): Promise<boolean> {
+		let found = false;
+		await this.update((data) => {
+			const session = data.sessions.find((s) => s.id === sessionId);
+			if (!session) return false;
+			session.coachingPending = false;
+			session.coaching = coaching;
+			found = true;
+		});
+		return found;
 	}
 
 	// ---------- derived stats ----------
@@ -245,17 +281,17 @@ export class Store {
 	}
 
 	async saveLabProgress(p: LabProgress): Promise<void> {
-		const data = await this.readProgress();
-		data.labs = data.labs ?? {};
-		data.labs[p.labId] = p;
-		await this.writeProgress(data);
+		await this.update((data) => {
+			data.labs = data.labs ?? {};
+			data.labs[p.labId] = p;
+		});
 	}
 
 	async markComplete(path: string): Promise<void> {
-		const data = await this.readProgress();
-		data.completed = data.completed ?? {};
-		data.completed[path] = new Date().toISOString();
-		await this.writeProgress(data);
+		await this.update((data) => {
+			data.completed = data.completed ?? {};
+			data.completed[path] = new Date().toISOString();
+		});
 	}
 
 	async isComplete(path: string): Promise<boolean> {
@@ -297,5 +333,14 @@ export class Store {
 		const rank: Record<string, number> = { easy: 0, hard: 1, brutal: 2 };
 		return bank.questions.slice().sort((a, b) => rank[a.tier] - rank[b.tier]);
 	}
+}
+
+/**
+ * An empty progress file with its own objects. Spreading EMPTY_PROGRESS would
+ * share its `completed` and `labs` maps, so the first write into one would
+ * leak into every later "empty" read.
+ */
+function freshProgress(): ProgressFile {
+	return { ...EMPTY_PROGRESS, attempts: [], sessions: [], completed: {}, labs: {} };
 }
 

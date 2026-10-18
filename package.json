@@ -1,7 +1,7 @@
 {
   "name": "recall-lab",
-  "version": "0.1.0",
-  "description": "Tiered quizzes with AI grading and a gradebook, for Obsidian.",
+  "version": "0.3.0",
+  "description": "Tiered exams, hands-on labs and a skill radar over your Obsidian notes, marked by Claude.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",

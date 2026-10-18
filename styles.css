@@ -83,6 +83,7 @@
 }
 .rl-progress-slim { height: 4px; margin-top: 0.4rem; }
 .rl-progress-fill {
+	width: var(--rl-fill, 0%);
 	height: 100%;
 	background: var(--interactive-accent);
 	transition: width 180ms ease;
@@ -472,6 +473,7 @@
 	font-size: var(--font-ui-small);
 }
 .rl-footer-btn:hover { background: var(--interactive-hover); }
+.rl-notice-stop { margin-top: 0.5rem; }
 .rl-footer-cta {
 	background: var(--interactive-accent); color: var(--text-on-accent);
 	border-color: transparent; font-weight: 600;
@@ -548,4 +550,10 @@
 .rl-challenge-code {
 	max-height: 32rem; overflow: auto;
 	font-size: 0.85em; line-height: 1.45;
+}
+
+.rl-collapsed { display: none; }
+.rl-confirm-list {
+	max-height: 14rem; overflow: auto;
+	font-size: 0.9em; color: var(--text-muted);
 }

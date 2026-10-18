@@ -1,13 +1,25 @@
 # Recall Lab
 
-An Obsidian plugin for tiered, graded quizzing over your own notes — multiple
-choice, select-all, free text, shell commands and image answers, with a
-persistent gradebook.
+An Obsidian plugin for tiered, graded exams over your own notes — multiple
+choice, select-all, free text, shell commands and image answers — with
+CTF-style hands-on labs, a skill radar per course, and a full answer history.
 
-**It never calls an AI API and holds no API key.** Objective questions are
-marked instantly and offline inside the plugin. Open answers are queued in a
-file in your vault; Claude grades them through the Obsidian MCP connection you
-already have and writes the verdicts back.
+**It holds no API key.** Multiple choice and select-all are marked instantly
+and offline inside the plugin. Everything that needs judgement — marking
+written answers, end-of-exam feedback, and writing quizzes and labs — runs
+through the Claude Code CLI on your own subscription. The plugin calls the CLI
+itself and waits for the reply, so there is nothing for you to type or run.
+
+## Requirements
+
+- Obsidian 1.5 or later, on desktop.
+- The Claude Code CLI, installed and signed in. Recall Lab looks in the usual
+  install locations and asks your login shell; if it still cannot find it, set
+  the path under **Settings → Recall Lab → Path to the claude binary** and use
+  **Check the connection** to test it.
+- macOS or Linux. It is developed and tested on macOS. On Windows it needs
+  `claude.exe` from Claude Code's native installer — an npm install only
+  provides `claude.cmd`, which it cannot start — and it is untested there.
 
 ## Install
 
@@ -23,40 +35,67 @@ already have and writes the verdicts back.
    (Community plugins must not be in restricted/safe mode.)
 4. Click the graduation-cap ribbon icon, or run **Recall Lab: Open Recall Lab**.
 
-## The grading loop
+## How marking works
 
 ```
-  you answer ──► MCQ / select-all / pattern match ──► marked instantly, offline
-             └─► text, command, image ──► _quiz/claude/pending.json
-                                              │
-                                   you say "/grade-quiz" in Claude
-                                              │
-                                     _quiz/claude/verdicts.json
-                                              │
-                      plugin notices the file change and folds the
-                      score, feedback, gaps and grade into the gradebook
+  you answer ──► MCQ / select-all / accept pattern ──► marked instantly, offline
+             └─► text, command, image ──► Claude Code CLI ──► score, feedback,
+                                                               missed rubric points
+  you finish ──► Claude reads the whole exam back ──► coaching on the pattern
+                                                      behind your mistakes
 ```
 
-The `/grade-quiz` slash command is installed at `~/.claude/commands/grade-quiz.md`.
-You can also just say "grade my quiz answers" in any Claude session that has the
-Obsidian connection.
+An open answer is marked in place: the model answer shows while Claude marks,
+then the score, the feedback and any rubric points you missed. If Claude cannot
+be reached, the answer is recorded as 0 with the reason, so an exam never
+stalls. **Strictness** (lenient, normal or brutal) is set in settings and
+written into every marking request.
+
+## Building courses, quizzes and labs
+
+- **Set up a course.** Pick a folder in the Recall Lab sidebar and press *Set
+  up this course*. Claude samples its notes and names 5–7 skill areas, which
+  become the spokes of the course's radar.
+- **Quiz a note.** Press *Generate* beside it, press *Complete* at the foot of
+  any note in a course folder, or run **Quiz me on this note**.
+- **Every missing quiz at once.** *Generate all N missing quizzes…* in the
+  course view shows an estimate, asks first, and can be stopped at any point.
+- **Labs.** *Labs* beside a note that has a quiz writes three CTF-style
+  challenges — one source file each, solvable by reading. Only a SHA-256 hash
+  of each flag is kept.
+
+Builds run one at a time. Anything you ask for while one is running is queued
+behind it, and asking twice for the same note does not build it twice.
 
 ## Files it uses, all inside your vault
 
 | Path | What it is |
 |---|---|
-| `_quiz/banks/*.json` | Question banks. One per class. |
-| `_quiz/progress/attempts.json` | Every answer, score and piece of feedback. |
-| `_quiz/progress/Gradebook.md` | Generated. Mastery per tier, weak areas, session history. |
-| `_quiz/claude/pending.json` | Open answers waiting to be graded. |
-| `_quiz/claude/verdicts.json` | What Claude wrote back. Cleared once consumed. |
+| `_quiz/courses/*.json` | Course definitions: the folder each one covers and its skill areas. |
+| `_quiz/banks/*.json` | Question banks, one per note. |
+| `_quiz/labs/*.json` | Labs, with each flag stored only as a hash. |
+| `_quiz/progress/attempts.json` | Every answer, score and piece of feedback; every exam; notes marked complete; lab progress. |
+| `_quiz/progress/recall-lab.log` | A plain-text log of the last 400 events, for when something goes wrong. |
+
+A lab you choose to write out — to compile or run it yourself — goes to
+`~/RecallLab/labs/`, outside the vault.
+
+Quizzes and labs are tied to their note by path, and courses to their folder.
+After deleting or renaming notes, run **Remove leftover quizzes, labs and
+courses**: it lists what no longer has a note or folder and, once you confirm,
+moves it to the trash. Your answer history is kept.
 
 ## Tiers
 
-Easy, Hard and Brutal. Mastery of a tier counts unanswered questions as zero,
-so the number answers *how much of this tier do I own*, not *how did I do on the
-three I tried*. Hard unlocks at 80% of Easy, Brutal at 80% of Hard; both
-thresholds are configurable, and the gate is advisory by default.
+Easy (recall), Hard (application) and Brutal (synthesis and hands-on). An exam
+ramps through all three — about 45% easy, 35% hard and 20% brutal — and within
+each tier asks unseen questions first, then your weakest, then the ones you
+have not seen for longest.
+
+Mastery counts unanswered questions as zero, so a radar spoke answers *how
+much of this area do I own*, not *how did I do on the three I tried*. A
+question's mastery is the mean of its last three scores, so one lucky guess
+does not erase a history of getting it wrong.
 
 ## Bank format
 
@@ -71,6 +110,7 @@ thresholds are configurable, and the gate is advisory by default.
       "tier": "easy",              // easy | hard | brutal
       "type": "mcq",               // mcq | multi | short | command | image
       "topic": "abcd-ordering",    // aggregates into weak areas
+      "axis": "register-model",    // the course skill area it feeds on the radar
       "prompt": "Which register number is `RBX`?",
       "code": "optional monospace block",
       "choices": ["`R3`", "`R1`", "`R2`", "`R4`"],
