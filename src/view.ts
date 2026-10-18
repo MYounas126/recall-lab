@@ -23,7 +23,7 @@ import { findLeeches } from "./leeches";
 import { needingSteps, needsGuidance } from "./guided";
 import { SECOND_TRY_CAP, combineTries } from "./tasks";
 import { blurtExam, missedHeading } from "./blurt";
-import { checkFlag, hintsNeedShortening, normaliseFlag } from "./labs";
+import { checkFlag, hashFlag, hintsNeedShortening } from "./labs";
 import { INSTALL_HINT } from "./claude";
 
 // Rough per-quiz figures for the bulk-generation dialog. Illustrative only:
@@ -83,8 +83,6 @@ export class RecallLabView extends ItemView {
 	private openLab: Lab | null = null;
 	/** The page last drawn (see pageKey), to tell a redraw from a move. */
 	private lastPage = "";
-	/** Wrong flags already submitted, per lab: trying one again is not another miss. */
-	private triedFlags = new Map<string, Set<string>>();
 
 	/** The paper being sat: a note's bank, a course's banks merged, or a review. */
 	private bank: Bank | null = null;
@@ -292,10 +290,14 @@ export class RecallLabView extends ItemView {
 
 	/** Which page is on screen: the same key means a redraw, not a move. */
 	private pageKey(): string {
-		const page = [this.screen, this.selectedFolder, this.openLab?.id, this.clinicKey, this.blurt?.path, this.teach?.path];
+		const page = [
+			this.screen, this.selectedFolder, this.openLab?.id, this.clinicKey, this.blurt?.path, this.teach?.path,
+			// A score landing opens a results page, which starts at the top.
+			this.blurt?.result ? "scored" : "", this.teach?.result ? "scored" : "",
+		];
 		// Each question of an exam is a page of its own.
 		if (this.screen === "exam") page.push(String(this.index));
-		return page.map((x) => x ?? "").join("|");
+		return page.map((x) => x || "").join("|");
 	}
 
 	/** How far the view is scrolled; the pane or its main column, whichever scrolls. */
@@ -1278,9 +1280,17 @@ export class RecallLabView extends ItemView {
 			return rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
 		};
 		const grouped = new Set(notes.map(groupOf)).size > 1;
+		// Sorted by module first: in a plain path sort, notes at the root fall
+		// between module folders and their heading came back more than once.
+		const byGroup = (a: string, b: string) => {
+			const ga = groupOf(a);
+			const gb = groupOf(b);
+			return ga < gb ? -1 : ga > gb ? 1 : a < b ? -1 : a > b ? 1 : 0;
+		};
+		const ordered = grouped ? notes.slice().sort(byGroup) : notes;
 		let group: string | null = null;
 
-		for (const path of notes) {
+		for (const path of ordered) {
 			if (grouped && groupOf(path) !== group) {
 				group = groupOf(path);
 				panel.createDiv({ cls: "rl-note-group", text: group ? group.split("/").join(" › ") : "In this folder" });
@@ -2338,13 +2348,17 @@ export class RecallLabView extends ItemView {
 			attr: { placeholder: lab.flagFormat, spellcheck: "false" },
 		});
 		const verdict = flagPanel.createDiv({ cls: "rl-flag-verdict" });
-		if (prog.attempts && !prog.solvedAt) {
+		if (prog.solvedAt) {
+			// The banner is at the top of the page; this is where you are.
+			verdict.addClass("rl-flag-right");
+			verdict.setText(`Correct: solved, ${labScore(prog)}%.`);
+		} else if (prog.attempts) {
 			verdict.addClass("rl-muted");
 			verdict.setText(`${prog.attempts} wrong so far.`);
 		}
 		const submit = async () => {
 			const value = input.value;
-			if (!value.trim()) return;
+			if (!value.trim() || prog.solvedAt) return;
 			if (checkFlag(lab, value)) {
 				prog.solvedAt = prog.solvedAt ?? new Date().toISOString();
 				await this.plugin.store.saveLabProgress(prog);
@@ -2355,15 +2369,14 @@ export class RecallLabView extends ItemView {
 				verdict.removeClass("rl-muted");
 				verdict.addClass("rl-flag-wrong");
 				// Pressing Enter twice, or trying the same guess again, costs
-				// nothing more: only a new wrong flag counts.
-				const tried = this.triedFlags.get(lab.id) ?? new Set<string>();
-				this.triedFlags.set(lab.id, tried);
-				const flag = normaliseFlag(value);
-				if (tried.has(flag)) {
+				// nothing more: only a new wrong flag counts. Kept (as hashes)
+				// with the lab's progress, so reopening the pane does not reset it.
+				const flag = hashFlag(value);
+				if (prog.wrongFlags?.includes(flag)) {
 					verdict.setText(`You already tried that one. ${prog.attempts} wrong so far.`);
 					return;
 				}
-				tried.add(flag);
+				prog.wrongFlags = [...(prog.wrongFlags ?? []), flag];
 				prog.attempts += 1;
 				await this.plugin.store.saveLabProgress(prog);
 				this.plugin.log.info("wrong flag", { lab: lab.id, attempts: prog.attempts, submitted: value.slice(0, 60) });

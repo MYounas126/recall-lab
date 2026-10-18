@@ -99,8 +99,13 @@
 	background: var(--background-modifier-border);
 	font-size: var(--font-ui-smaller);
 	line-height: 1.5;
-	/* A chip is one label: "46 q" broken over two lines read as two chips. */
+	/* A chip is one label: "46 q" broken over two lines read as two chips.
+	   A long one (a topic, a lab's title) is cut short rather than overflow. */
 	white-space: nowrap;
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	vertical-align: middle;
 }
 .rl-chip-dim { color: var(--text-faint); }
 
@@ -710,3 +715,4 @@
 
 /* Under the flag box: wrong flags so far, then each new verdict. */
 .rl-flag-verdict { margin-top: 0.4rem; }
+.rl-flag-right { color: var(--color-green); font-size: var(--font-ui-smaller); }
