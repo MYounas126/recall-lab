@@ -106,6 +106,12 @@ export interface Attempt {
 	ms: number;
 	/** How sure you said you were. Absent on answers from before it was asked, and on skips. */
 	confidence?: Confidence;
+	/**
+	 * What you typed from memory before the options were shown, in
+	 * recall-first mode: empty if you only thought of it, absent when the
+	 * options were shown straight away.
+	 */
+	recalled?: string;
 }
 
 export interface SessionSummary {

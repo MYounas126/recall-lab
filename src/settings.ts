@@ -28,6 +28,8 @@ export interface RecallLabSettings {
 	newPerDay: number;
 	/** Memory dots on headings, the memory line in note footers, and the status-bar due count. */
 	memoryMap: boolean;
+	/** Hide choice options until you have tried to recall the answer. */
+	recallFirst: boolean;
 }
 
 export const DEFAULT_SETTINGS: RecallLabSettings = {
@@ -46,6 +48,7 @@ export const DEFAULT_SETTINGS: RecallLabSettings = {
 	targetRecall: 90,
 	newPerDay: 20,
 	memoryMap: true,
+	recallFirst: false,
 };
 
 export class RecallLabSettingTab extends PluginSettingTab {
@@ -132,6 +135,21 @@ export class RecallLabSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				});
 			});
+
+		new Setting(containerEl).setName("Questions").setHeading();
+
+		new Setting(containerEl)
+			.setName("Recall before recognition")
+			.setDesc(
+				"On multiple-choice and select-all questions, hide the options until you have typed or thought of " +
+					"your answer. Producing an answer builds memory better than spotting it. Also switchable from the exam bar."
+			)
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.recallFirst).onChange(async (v) => {
+					this.plugin.settings.recallFirst = v;
+					await this.plugin.saveSettings();
+				})
+			);
 
 		new Setting(containerEl).setName("Daily review").setHeading();
 
