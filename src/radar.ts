@@ -170,8 +170,10 @@ export function renderRadar(parent: HTMLElement, scores: AxisScore[], opts: Rada
 	scores.forEach((s, i) => {
 		const r = (radius * Math.max(0, Math.min(100, s.score))) / 100;
 		const [x, y] = pt(i, r);
-		const cls = s.seen === 0 ? "rl-radar-dot rl-radar-dot-untested" : "rl-radar-dot";
-		svg.createSvg("circle", { cls, attr: { cx: x.toFixed(1), cy: y.toFixed(1), r: 3.5 } });
+		const dot = svg.createSvg("circle", { cls: "rl-radar-dot", attr: { cx: x.toFixed(1), cy: y.toFixed(1), r: 3.5 } });
+		// One class at a time: an SVG element's classes are added token by
+		// token, and "a b" as one token throws, which blanked the whole view.
+		if (s.seen === 0) dot.addClass("rl-radar-dot-untested");
 	});
 
 	// Labels, wrapped and anchored so they never overlap the wheel or the edge.
