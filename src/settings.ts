@@ -40,6 +40,8 @@ export interface RecallLabSettings {
 	secondTry: boolean;
 	/** Minutes on the clock for "write it all down". */
 	blurtMinutes: number;
+	/** Questions the student may ask in "teach it back" before it is scored. */
+	teachQuestions: number;
 }
 
 export const DEFAULT_SETTINGS: RecallLabSettings = {
@@ -64,6 +66,7 @@ export const DEFAULT_SETTINGS: RecallLabSettings = {
 	guidedSteps: true,
 	secondTry: true,
 	blurtMinutes: 3,
+	teachQuestions: 3,
 };
 
 export class RecallLabSettingTab extends PluginSettingTab {
@@ -215,6 +218,23 @@ export class RecallLabSettingTab extends PluginSettingTab {
 					.setDynamicTooltip()
 					.onChange(async (v) => {
 						this.plugin.settings.blurtMinutes = v;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Teach it back: student questions")
+			.setDesc(
+				"How many follow-up questions the student may ask before your explanation is scored. Each is one " +
+					"Claude request, and scoring is one more."
+			)
+			.addSlider((s) =>
+				s
+					.setLimits(1, 5, 1)
+					.setValue(this.plugin.settings.teachQuestions)
+					.setDynamicTooltip()
+					.onChange(async (v) => {
+						this.plugin.settings.teachQuestions = v;
 						await this.plugin.saveSettings();
 					})
 			);

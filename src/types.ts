@@ -189,6 +189,29 @@ export interface ProgressFile {
 	clinic?: Record<string, Diagnosis>;
 	/** "Write it all down" checks, oldest first. */
 	blurts?: BlurtResult[];
+	/** "Teach it back" sessions, oldest first. */
+	teachbacks?: TeachResult[];
+}
+
+/** One message in a teach-it-back conversation. */
+export interface Turn {
+	who: "you" | "student";
+	text: string;
+}
+
+/** How well a teach-it-back explanation covered its note. */
+export interface TeachResult {
+	/** Vault path of the note. */
+	note: string;
+	at: string;
+	/** Share of the note's key points you covered, 0–100, as Claude judged it. */
+	score: number;
+	feedback: string;
+	covered: string[];
+	/** Key points you never got to, with the section they come from when there is one. */
+	missed: { point: string; heading?: string }[];
+	/** How many times you explained, counting answers to the student's questions. */
+	turns: number;
 }
 
 /** How a "write it all down" attempt compared with its note. */

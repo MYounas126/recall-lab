@@ -6,7 +6,7 @@ import { shuffled } from "./util";
 import { QuestionScore, renderRadar, scoreAxes, scoreCourses, weakestTested, untested, withBefore, AxisScore } from "./radar";
 import {
 	Attempt, Bank, BlurtResult, Confidence, Course, ExamItem, Lab, LabProgress, ProgressFile, Question, SessionSummary, Tier,
-	idOf, labScore, letterGrade, qkey,
+	TeachResult, Turn, idOf, labScore, letterGrade, qkey,
 } from "./types";
 import { AnswerIndex, calibration } from "./history";
 import {
@@ -34,7 +34,18 @@ const USD_PER_QUIZ = 0.13;
 
 export const VIEW_TYPE_RECALL = "recall-lab-view";
 
-type Screen = "home" | "folder" | "exam" | "results" | "history" | "lab" | "clinic" | "blurt";
+type Screen = "home" | "folder" | "exam" | "results" | "history" | "lab" | "clinic" | "blurt" | "teach";
+
+/** A teach-it-back conversation in progress. */
+interface TeachState {
+	path: string;
+	turns: Turn[];
+	/** What is typed but not sent yet, kept across redraws. */
+	draft: string;
+	/** What Claude is doing, while it is. */
+	busy: string | null;
+	result: TeachResult | null;
+}
 
 /** A write-it-down page: what is written so far, its deadline, and Claude's comparison once it is in. */
 interface BlurtPage {
@@ -84,6 +95,8 @@ export class RecallLabView extends ItemView {
 	private blurt: BlurtPage | null = null;
 	/** The write-it-down countdown, while it runs. */
 	private blurtClock: number | null = null;
+	/** The teach-it-back conversation on screen. */
+	private teach: TeachState | null = null;
 	/** Which guided step of the question on screen is showing. */
 	private guideStage: { index: number; step: number } | null = null;
 	/** Ends a second try that is waiting on you, as "show the answer". */
@@ -173,7 +186,9 @@ export class RecallLabView extends ItemView {
 	 * dead button — so background work must not trigger one.
 	 */
 	get occupied(): boolean {
-		return this.screen === "exam" || this.screen === "lab" || (this.screen === "blurt" && !this.blurt?.result);
+		return this.screen === "exam" || this.screen === "lab" ||
+			(this.screen === "blurt" && !this.blurt?.result) ||
+			(this.screen === "teach" && !this.teach?.result);
 	}
 
 	/**
@@ -273,6 +288,7 @@ export class RecallLabView extends ItemView {
 		else if (this.screen === "history") await this.renderHistory(main);
 		else if (this.screen === "clinic" && this.clinicKey) await this.renderClinic(main, this.clinicKey);
 		else if (this.screen === "blurt" && this.blurt) await this.renderBlurt(main, this.blurt);
+		else if (this.screen === "teach" && this.teach) await this.renderTeach(main, this.teach);
 		else if (this.screen === "folder" && this.selectedFolder) await this.renderFolder(main, this.selectedFolder);
 		else await this.renderHome(main);
 	}
@@ -607,6 +623,209 @@ export class RecallLabView extends ItemView {
 			row.createSpan({ cls: "rl-bar-label", text: b.note.split("/").pop()!.replace(/\.md$/, "") });
 			row.createDiv({ cls: "rl-progress" }).createDiv({ cls: "rl-progress-fill" }).setCssProps({ "--rl-fill": `${b.score}%` });
 			row.createSpan({ cls: "rl-bar-value", text: `${b.score}% · ${describeAgo(new Date(b.at), new Date())}` });
+		}
+	}
+
+	/**
+	 * Teach it back: explain a note to a curious beginner, played by Claude,
+	 * then see what you covered. A conversation left unscored for the same
+	 * note is picked up again: its replies were paid for.
+	 */
+	async startTeachBack(path: string): Promise<void> {
+		await this.refresh();
+		if (this.teach?.path !== path || this.teach.result) {
+			this.teach = { path, turns: [], draft: "", busy: null, result: null };
+		}
+		this.screen = "teach";
+		await this.render();
+	}
+
+	/** Whether this conversation is the one on screen. */
+	private teaching(t: TeachState): boolean {
+		return this.screen === "teach" && this.teach === t;
+	}
+
+	/** Redraws only if this conversation is still the one on screen. */
+	private async redrawTeach(t: TeachState): Promise<void> {
+		if (this.screen === "teach" && this.teach === t) await this.render();
+	}
+
+	private async renderTeach(main: HTMLElement, t: TeachState): Promise<void> {
+		const name = t.path.split("/").pop()!.replace(/\.md$/, "");
+		const head = main.createDiv({ cls: "rl-head" });
+		const back = head.createEl("a", { cls: "rl-link", text: "← back" });
+		back.onclick = (e) => { e.preventDefault(); this.teach = null; void this.revealNote(t.path); };
+		head.createEl("h2", { text: `Teach it back: ${name}` });
+		if (t.result) {
+			await this.renderTeachResult(main, t);
+			return;
+		}
+
+		const max = this.plugin.settings.teachQuestions;
+		const asked = t.turns.filter((x) => x.who === "student").length;
+		if (!t.turns.length) {
+			main.createDiv({
+				cls: "rl-muted",
+				text: "Explain this note to a curious beginner: what it is about, the key ideas, why they matter, an " +
+					`example. Claude plays the student and asks about anything vague or missing, up to ${max} ` +
+					`question${max === 1 ? "" : "s"}, then scores how much of the note you covered. Each student ` +
+					"reply is one Claude request, and the score is one more.",
+			});
+		}
+		const chat = main.createDiv({ cls: "rl-teach-chat" });
+		for (const turn of t.turns) {
+			const bubble = chat.createDiv({ cls: `rl-teach-turn rl-teach-${turn.who}` });
+			bubble.createDiv({ cls: "rl-model-label", text: turn.who === "you" ? "You" : "Student" });
+			await this.md(turn.text, bubble.createDiv());
+		}
+		if (t.busy) {
+			const row = chat.createDiv({ cls: "rl-fb-head" });
+			row.createDiv({ cls: "rl-spinner" });
+			row.createSpan({ text: t.busy });
+			return;
+		}
+
+		const area = main.createEl("textarea", {
+			cls: "rl-text",
+			attr: { rows: "6", placeholder: t.turns.length ? "Your answer to the student" : "Your explanation" },
+		});
+		area.value = t.draft;
+		area.oninput = () => (t.draft = area.value);
+		const send = async () => {
+			const text = area.value.trim();
+			if (!text) { new Notice("Write your explanation first."); return; }
+			t.turns.push({ who: "you", text });
+			t.draft = "";
+			if (asked >= max) { await this.scoreTeach(t); return; }
+			t.busy = "The student is thinking…";
+			await this.redrawTeach(t);
+			let res: Awaited<ReturnType<typeof this.plugin.tasks.studentReply>>;
+			try {
+				res = await this.plugin.tasks.studentReply(t.path, t.turns, max - asked);
+			} catch (e) {
+				res = { error: String(e) };
+			} finally {
+				t.busy = null;
+			}
+			if ("error" in res) {
+				this.plugin.log.error("teach-back reply failed", { note: t.path, error: res.error });
+				if (this.teaching(t)) new Notice(`The student could not reply: ${res.error}`, 12000);
+				// Put the text back, so nothing typed is lost.
+				t.draft = t.turns.pop()?.text ?? "";
+				await this.redrawTeach(t);
+				return;
+			}
+			t.turns.push({ who: "student", text: res.reply });
+			// Scored straight away only if you are still here: a conversation
+			// you left waits, reply and all, and scoring it is another request.
+			if (res.done && this.teaching(t)) await this.scoreTeach(t);
+			else await this.redrawTeach(t);
+		};
+		area.onkeydown = (e) => {
+			if (e.key === "Enter" && (Platform.isMacOS ? e.metaKey : e.ctrlKey)) { e.preventDefault(); void send(); }
+		};
+		const actions = main.createDiv({ cls: "rl-actions" });
+		new ButtonComponent(actions)
+			.setButtonText(t.turns.length ? "Answer (uses Claude)" : "Explain (uses Claude)")
+			.setCta()
+			.onClick(() => void send());
+		if (t.turns.some((x) => x.who === "you")) {
+			new ButtonComponent(actions).setButtonText("Finish and score (uses Claude)").onClick(() => {
+				// An answer still in the box is part of what you taught.
+				const last = area.value.trim();
+				if (last) {
+					t.turns.push({ who: "you", text: last });
+					t.draft = "";
+				}
+				void this.scoreTeach(t);
+			});
+		}
+		const mod = Platform.isMacOS ? "⌘" : "Ctrl";
+		actions.createSpan({
+			cls: "rl-hint",
+			text: asked >= max ? `${mod}+Enter sends · this answer is scored next` : `${mod}+Enter sends · up to ${max - asked} more question${max - asked === 1 ? "" : "s"}`,
+		});
+		window.setTimeout(() => area.focus(), 0);
+	}
+
+	private async scoreTeach(t: TeachState): Promise<void> {
+		t.busy = "Claude is scoring your explanation…";
+		await this.redrawTeach(t);
+		let res: TeachResult | { error: string };
+		try {
+			res = await this.plugin.tasks.scoreTeachBack(t.path, t.turns);
+		} catch (e) {
+			res = { error: String(e) };
+		} finally {
+			t.busy = null;
+		}
+		if ("error" in res) {
+			this.plugin.log.error("teach-back scoring failed", { note: t.path, error: res.error });
+			if (this.teaching(t)) new Notice(`Could not score it: ${res.error}`, 12000);
+			await this.redrawTeach(t);
+			return;
+		}
+		this.plugin.log.info("taught back", { note: t.path, score: res.score, turns: res.turns });
+		// Shown before it is saved: the score is paid for, and a save that
+		// fails must not hide it.
+		t.result = res;
+		await this.redrawTeach(t);
+		try {
+			await this.plugin.store.saveTeachBack(res);
+		} catch (e) {
+			this.plugin.log.error("could not save a teach-back", { note: t.path, error: String(e) });
+			new Notice(`Recall Lab could not save this score: ${String(e)}`, 12000);
+		}
+	}
+
+	/** What you covered of the note's key points, and what you never got to. */
+	private async renderTeachResult(main: HTMLElement, t: TeachState): Promise<void> {
+		const r = t.result!;
+		const hero = main.createDiv({ cls: "rl-results" });
+		hero.createDiv({ cls: "rl-result-grade", text: `${r.score}%` });
+		hero.createDiv({
+			cls: "rl-result-sub",
+			text: `of the note's key points covered · ${r.covered.length} covered, ${r.missed.length} missed, over ${r.turns} explanation${r.turns === 1 ? "" : "s"}`,
+		});
+		if (r.feedback) {
+			const fb = main.createDiv({ cls: "rl-coaching" });
+			fb.createDiv({ cls: "rl-model-label", text: "Feedback from Claude" });
+			await this.md(r.feedback, fb.createDiv());
+		}
+		const link = t.path.replace(/\.md$/, "");
+		if (r.missed.length) {
+			const panel = main.createDiv({ cls: "rl-panel" });
+			panel.createEl("h3", { text: "What you never got to" });
+			for (const m of r.missed) {
+				const row = panel.createDiv({ cls: "rl-review-row" });
+				void this.md(m.point, row.createDiv({ cls: "rl-review-q" }));
+				if (m.heading) {
+					const a = row.createEl("a", { cls: "rl-link", text: `Read it again → ${m.heading}` });
+					a.onclick = (e) => { e.preventDefault(); void this.app.workspace.openLinkText(`${link}#${m.heading}`, "", false); };
+				}
+			}
+		}
+		if (r.covered.length) {
+			const panel = main.createDiv({ cls: "rl-panel" });
+			panel.createEl("h3", { text: "What you explained" });
+			const ul = panel.createEl("ul");
+			for (const point of r.covered) void this.md(point, ul.createEl("li"));
+		}
+		const actions = main.createDiv({ cls: "rl-actions" });
+		new ButtonComponent(actions).setButtonText("Teach it again").setCta().onClick(() => void this.startTeachBack(t.path));
+		new ButtonComponent(actions).setButtonText("Back to the course").onClick(() => { this.teach = null; void this.revealNote(t.path); });
+	}
+
+	/** Recent teach-it-back scores. */
+	private renderTeachBacks(main: HTMLElement, results: TeachResult[]): void {
+		if (!results.length) return;
+		const panel = main.createDiv({ cls: "rl-panel" });
+		panel.createEl("h3", { text: "Taught back" });
+		for (const r of results.slice(-8).reverse()) {
+			const row = panel.createDiv({ cls: "rl-bar-row" });
+			row.createSpan({ cls: "rl-bar-label", text: r.note.split("/").pop()!.replace(/\.md$/, "") });
+			row.createDiv({ cls: "rl-progress" }).createDiv({ cls: "rl-progress-fill" }).setCssProps({ "--rl-fill": `${r.score}%` });
+			row.createSpan({ cls: "rl-bar-value", text: `${r.score}% · ${describeAgo(new Date(r.at), new Date())}` });
 		}
 	}
 
@@ -1037,6 +1256,10 @@ export class RecallLabView extends ItemView {
 				.setIcon("pencil")
 				.setTooltip("Write down everything you remember, then compare it with the note (uses Claude)")
 				.onClick(() => void this.startBlurt(path));
+			new ButtonComponent(right)
+				.setIcon("messages-square")
+				.setTooltip("Teach this note back to a curious beginner (uses Claude)")
+				.onClick(() => void this.startTeachBack(path));
 			if (bank) {
 				right.createSpan({ cls: "rl-chip", text: `${bank.questions.length} q` });
 				new ButtonComponent(right).setButtonText("Exam").setCta()
@@ -2169,6 +2392,7 @@ export class RecallLabView extends ItemView {
 		await this.renderActivity(main, progress);
 		this.renderCalibration(main, progress.attempts);
 		this.renderBlurts(main, progress.blurts ?? []);
+		this.renderTeachBacks(main, progress.teachbacks ?? []);
 
 		// Weakest topics across everything.
 		const byTopic = new Map<string, number[]>();

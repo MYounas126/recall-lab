@@ -11,6 +11,7 @@ import {
 	EMPTY_PROGRESS,
 	ProgressFile,
 	SessionSummary,
+	TeachResult,
 	Tier,
 	TIERS,
 } from "./types";
@@ -244,6 +245,13 @@ export class Store {
 	async recordSession(summary: SessionSummary): Promise<ProgressFile> {
 		return this.update((data) => {
 			data.sessions.push(summary);
+		});
+	}
+
+	/** Keeps a "teach it back" result. */
+	async saveTeachBack(result: TeachResult): Promise<void> {
+		await this.update((data) => {
+			data.teachbacks = [...(data.teachbacks ?? []), result];
 		});
 	}
 

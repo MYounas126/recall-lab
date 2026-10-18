@@ -1,9 +1,10 @@
 import { App, Notice, TFile, normalizePath } from "obsidian";
 import { ClaudeCli } from "./claude";
 import { Store } from "./store";
-import { Attempt, Bank, BlurtResult, Course, Diagnosis, Lab, Question, QuestionType, Verdict } from "./types";
+import { Attempt, Bank, BlurtResult, Course, Diagnosis, Lab, Question, QuestionType, TeachResult, Turn, Verdict } from "./types";
 import type { Leech } from "./leeches";
-import { blurtPrompt, headingsOf, parseBlurt, sectionsOf } from "./blurt";
+import { Section, blurtPrompt, headingsOf, parseBlurt, sectionsOf } from "./blurt";
+import { parseStudent, parseTeachScore, studentPrompt, teachScorePrompt } from "./teach";
 import { hashFlag, validateLab, detectToolchain, describeToolchain } from "./labs";
 import type { Strictness } from "./settings";
 import { hashText } from "./util";
@@ -246,17 +247,45 @@ export class Tasks {
 		return out;
 	}
 
+	// ----------------------------------------------------------- teach it back
+
+	/** The student's next question about a note you are explaining, or its thanks when you are done. */
+	async studentReply(notePath: string, turns: Turn[], questionsLeft: number): Promise<{ reply: string; done: boolean } | { error: string }> {
+		const note = this.app.vault.getAbstractFileByPath(notePath);
+		if (!(note instanceof TFile)) return { error: `${notePath} is not a note.` };
+		const content = await this.app.vault.cachedRead(note);
+		const res = await this.cli.askJson<unknown>(studentPrompt(note.basename, content, turns, questionsLeft), 120000);
+		if (!res.ok) return { error: res.error };
+		const reply = parseStudent(res.data);
+		return typeof reply === "string" ? { error: `The student's reply was not usable: ${reply}.` } : reply;
+	}
+
+	/** Scores a whole teach-it-back conversation against the note's key points. */
+	async scoreTeachBack(notePath: string, turns: Turn[]): Promise<TeachResult | { error: string }> {
+		const note = this.app.vault.getAbstractFileByPath(notePath);
+		if (!(note instanceof TFile)) return { error: `${notePath} is not a note.` };
+		const content = await this.app.vault.cachedRead(note);
+		const sections = this.sectionsOf(note, content).map((s) => s.name);
+		const res = await this.cli.askJson<unknown>(teachScorePrompt(note.basename, content, turns, sections), 180000);
+		if (!res.ok) return { error: res.error };
+		const result = parseTeachScore(res.data, sections, notePath, turns, new Date());
+		return typeof result === "string" ? { error: `Claude's score was not usable: ${result}.` } : result;
+	}
+
 	// --------------------------------------------------------- write it down
+
+	/** A note's sections, from Obsidian's own reading of its headings where it has one. */
+	private sectionsOf(note: TFile, content: string): Section[] {
+		const cached = this.app.metadataCache?.getFileCache(note)?.headings;
+		return sectionsOf(cached?.length ? cached.map((h) => ({ text: h.heading, level: h.level })) : headingsOf(content));
+	}
 
 	/** Compares what you wrote from memory with the note, section by section. */
 	async checkBlurt(notePath: string, written: string): Promise<BlurtResult | { error: string }> {
 		const note = this.app.vault.getAbstractFileByPath(notePath);
 		if (!(note instanceof TFile)) return { error: `${notePath} is not a note.` };
 		const content = await this.app.vault.cachedRead(note);
-		// Obsidian's own reading of the headings where it has one.
-		const cached = this.app.metadataCache?.getFileCache(note)?.headings;
-		const headings = cached?.length ? cached.map((h) => ({ text: h.heading, level: h.level })) : headingsOf(content);
-		const sections = sectionsOf(headings);
+		const sections = this.sectionsOf(note, content);
 		// A note with no headings is one section, named after the note.
 		if (!sections.length) sections.push({ name: note.basename, link: "" });
 		const res = await this.cli.askJson<unknown>(
