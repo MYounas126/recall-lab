@@ -1,0 +1,23 @@
+{
+  "name": "recall-lab",
+  "version": "0.1.0",
+  "description": "Tiered quizzes with AI grading and a gradebook, for Obsidian.",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+  },
+  "keywords": [],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "builtin-modules": "^4.0.0",
+    "esbuild": "^0.24.2",
+    "obsidian": "^1.7.2",
+    "tslib": "^2.8.1",
+    "typescript": "^5.7.2"
+  },
+  "allowScripts": {
+    "esbuild@0.24.2": true
+  }
+}
