@@ -406,16 +406,19 @@ export class RecallLabView extends ItemView {
 		);
 	}
 
-	/** Reviews one note: what is due in it, then its share of today's new questions. */
+	/**
+	 * Reviews what is due in one note. New questions are left to the daily
+	 * review: from here they would spend the whole vault's allowance on one note.
+	 */
 	async startNoteReview(path: string): Promise<void> {
 		await this.refresh();
 		const name = path.split("/").pop()!.replace(/\.md$/, "");
-		await this.review(this.banks.filter((b) => b.note === path), `review:${path}`, `Review · ${name}`);
+		await this.review(this.banks.filter((b) => b.note === path), `review:${path}`, `Review · ${name}`, true);
 	}
 
-	private async review(banks: Bank[], id: string, title: string): Promise<void> {
+	private async review(banks: Bank[], id: string, title: string, dueOnly = false): Promise<void> {
 		const { plan, memory, keys } = await this.planFor(banks);
-		const items = [...plan.due, ...plan.fresh];
+		const items = dueOnly ? plan.due : [...plan.due, ...plan.fresh];
 		if (!items.length) {
 			const now = new Date();
 			const next = memory.nextDue(endOfDay(now), keys);
