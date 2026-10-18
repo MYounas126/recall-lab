@@ -34,6 +34,10 @@ export interface RecallLabSettings {
 	highlightClozes: boolean;
 	/** Misses after which a question goes to the leech clinic. */
 	leechThreshold: number;
+	/** Walk through a brutal problem's steps first when it is new to you or you missed it last time. */
+	guidedSteps: boolean;
+	/** After a missed written answer, a nudge from Claude and one more try before the model answer. */
+	secondTry: boolean;
 }
 
 export const DEFAULT_SETTINGS: RecallLabSettings = {
@@ -55,6 +59,8 @@ export const DEFAULT_SETTINGS: RecallLabSettings = {
 	recallFirst: false,
 	highlightClozes: true,
 	leechThreshold: 4,
+	guidedSteps: true,
+	secondTry: true,
 };
 
 export class RecallLabSettingTab extends PluginSettingTab {
@@ -166,6 +172,32 @@ export class RecallLabSettingTab extends PluginSettingTab {
 			.addToggle((t) =>
 				t.setValue(this.plugin.settings.highlightClozes).onChange(async (v) => {
 					this.plugin.settings.highlightClozes = v;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(containerEl)
+			.setName("Second try on written answers")
+			.setDesc(
+				"When Claude marks a written answer as not right, it asks one nudging question and you get one more " +
+					"try before the model answer shows. A second try earns at most 75%; trying again is one more Claude request."
+			)
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.secondTry).onChange(async (v) => {
+					this.plugin.settings.secondTry = v;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(containerEl)
+			.setName("Guided steps")
+			.setDesc(
+				"Walk through a brutal problem's smaller steps, each checked at once, before answering it whole: when " +
+					"it is new to you or you missed it last time. Steps are written per course, on request."
+			)
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.guidedSteps).onChange(async (v) => {
+					this.plugin.settings.guidedSteps = v;
 					await this.plugin.saveSettings();
 				})
 			);

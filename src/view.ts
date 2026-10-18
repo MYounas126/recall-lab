@@ -20,6 +20,8 @@ import {
 } from "./answers";
 import { needingVariants, withVariants } from "./variants";
 import { findLeeches } from "./leeches";
+import { needingSteps, needsGuidance } from "./guided";
+import { SECOND_TRY_CAP, combineTries } from "./tasks";
 import { checkFlag } from "./labs";
 import { INSTALL_HINT } from "./claude";
 
@@ -68,6 +70,12 @@ export class RecallLabView extends ItemView {
 	private coachingInFlight = new Set<string>();
 	/** The leech clinic's question on screen, by key. */
 	private clinicKey: string | null = null;
+	/** Which guided step of the question on screen is showing. */
+	private guideStage: { index: number; step: number } | null = null;
+	/** Ends a second try that is waiting on you, as "show the answer". */
+	private settleSecondTry: (() => void) | null = null;
+	/** Resolves once the answer last submitted has been marked and saved. */
+	private submitting: Promise<void> | null = null;
 	/** Recall-first state for the question on screen. */
 	private recallStage: RecallStage | null = null;
 	/** What the keyboard can do to the question on screen. */
@@ -99,6 +107,11 @@ export class RecallLabView extends ItemView {
 		this.contentEl.tabIndex = -1;
 		this.registerDomEvent(this.containerEl, "keydown", (e) => this.onKey(e));
 		await this.render();
+	}
+
+	async onClose(): Promise<void> {
+		// A second try still open keeps the first answer, which is then saved.
+		this.settleSecondTry?.();
 	}
 
 	/** Keyboard shortcuts on the exam screen; see keyAction for the map. */
@@ -551,7 +564,34 @@ export class RecallLabView extends ItemView {
 					`Write variants for ${n} question${n === 1 ? "" : "s"}?`,
 					`Claude writes two variants of each, one request per quiz (${needing.length}). This uses your Claude plan.`,
 					"Write variants",
-					() => void this.plugin.buildVariants(needing)
+					() => void this.plugin.buildExtras("variants", needing)
+				).open();
+			});
+	}
+
+	/** Offers guided steps for the course's brutal problems; writing them uses Claude, so it asks first. */
+	private renderStepsPanel(main: HTMLElement, banks: Bank[]): void {
+		if (!this.plugin.settings.guidedSteps) return;
+		const needing = needingSteps(banks);
+		const n = needing.reduce((s, b) => s + b.questions.length, 0);
+		if (!n) return;
+		const panel = main.createDiv({ cls: "rl-panel" });
+		panel.createEl("h3", { text: "Guided steps" });
+		panel.createDiv({
+			cls: "rl-muted",
+			text: `${n} brutal problem${n === 1 ? " has" : "s have"} no guided steps. With steps, a problem that is new to ` +
+				"you or that you missed last time is walked through 3 to 5 smaller questions, each checked at once, " +
+				"before you answer it whole.",
+		});
+		new ButtonComponent(panel.createDiv({ cls: "rl-actions" }))
+			.setButtonText(`Write guided steps for ${n}…`)
+			.onClick(() => {
+				new ConfirmModal(
+					this.app,
+					`Write guided steps for ${n} problem${n === 1 ? "" : "s"}?`,
+					`Claude breaks each into 3 to 5 smaller steps, one request per quiz (${needing.length}). This uses your Claude plan.`,
+					"Write steps",
+					() => void this.plugin.buildExtras("steps", needing)
 				).open();
 			});
 	}
@@ -691,6 +731,7 @@ export class RecallLabView extends ItemView {
 		const reviewable = [...courseBanks, ...this.highlightsIn(folder)];
 		if (reviewable.length) await this.renderReviewPanel(main, reviewable, course);
 		this.renderVariantsPanel(main, courseBanks, progress.attempts);
+		this.renderStepsPanel(main, courseBanks);
 
 		// Course-wide exam.
 		const examPanel = main.createDiv({ cls: "rl-panel" });
@@ -885,10 +926,19 @@ export class RecallLabView extends ItemView {
 
 	private async launch(bank: Bank, picked: ExamItem[], kind: "exam" | "review" = "exam"): Promise<void> {
 		if (!picked.length) { new Notice("Recall Lab: that quiz has no questions."); return; }
+		// A second try left open on the last exam keeps its first answer.
+		this.settleSecondTry?.();
+		// A problem with guided steps is walked through them when it is new to
+		// you or was missed last time; otherwise it is asked unaided.
+		if (this.plugin.settings.guidedSteps && picked.some((it) => it.q.steps?.length)) {
+			const index = new AnswerIndex((await this.plugin.store.readProgress()).attempts);
+			picked = picked.map((it) => (needsGuidance(it.q, index.attempts(it.bankId, idOf(it))) ? { ...it, guided: true } : it));
+		}
 		this.bank = bank;
 		this.examItems = picked;
 		this.sessionKind = kind;
 		this.recallStage = null;
+		this.guideStage = null;
 		this.index = 0;
 		this.answers = [];
 		this.sessionId = `s-${Date.now().toString(36)}`;
@@ -949,6 +999,14 @@ export class RecallLabView extends ItemView {
 			card.createEl("pre", { cls: "rl-code" }).createEl("code", { text: q.code });
 		}
 
+		const steps = item.guided ? q.steps ?? [] : [];
+		const step = this.guideStage?.index === this.index ? this.guideStage.step : 0;
+		if (step < steps.length) {
+			this.renderGuidedStep(card, steps, step);
+			return;
+		}
+		if (steps.length) card.createDiv({ cls: "rl-hint rl-unaided", text: "Now the whole problem, unaided." });
+
 		if (hidden) {
 			recallText = this.renderRecallStage(card);
 			return;
@@ -1006,6 +1064,93 @@ export class RecallLabView extends ItemView {
 			focus: () => submit.buttonEl.focus(),
 		};
 		submit.buttonEl.focus();
+	}
+
+	/**
+	 * One guided step on the way to a brutal problem. It is marked on the spot,
+	 * showing what was wrong and why, and moves on to the next step, or to the
+	 * whole problem after the last. Step answers are scaffolding, not recorded.
+	 */
+	private renderGuidedStep(card: HTMLElement, steps: Question[], at: number): void {
+		const index = this.index;
+		const step = steps[at];
+		const box = card.createDiv({ cls: "rl-guided" });
+		box.createDiv({ cls: "rl-model-label", text: `Guided step ${at + 1} of ${steps.length}` });
+		void this.md(step.prompt, box.createDiv({ cls: "rl-prompt" }));
+		if (step.code && step.type !== "hotspot" && step.type !== "trace") {
+			box.createEl("pre", { cls: "rl-code" }).createEl("code", { text: step.code });
+		}
+		const state: AnswerState = { chosen: [], text: "" };
+		const answer = box.createDiv({ cls: "rl-answer" });
+		const options = this.renderAnswerWidget(step, answer, state);
+
+		const goTo = (to: number) => {
+			this.guideStage = { index, step: to };
+			void this.render();
+		};
+		const actions = box.createDiv({ cls: "rl-actions" });
+		let checked = false;
+		const check = () => {
+			if (checked) { goTo(at + 1); return; }
+			const unready = notReady(step, state);
+			if (unready) { new Notice(unready); return; }
+			const res = gradeLocally(step, state);
+			if (!res) return;
+			checked = true;
+			answer.querySelectorAll("input, textarea, select, button").forEach((el) => el.setAttr("disabled", "true"));
+			const result = box.createDiv({ cls: `rl-feedback rl-fb-${res.verdict}` });
+			const head = result.createDiv({ cls: "rl-fb-head" });
+			setIcon(head.createSpan({ cls: "rl-fb-icon" }), res.verdict === "correct" ? "check-circle" : res.verdict === "partial" ? "circle-slash" : "x-circle");
+			head.createSpan({ cls: "rl-fb-title", text: res.verdict === "correct" ? "Right" : "Not quite" });
+			if (res.feedback) void this.md(res.feedback, result.createDiv({ cls: "rl-fb-body" }));
+			if (step.explain) void this.md(step.explain, result.createDiv({ cls: "rl-explain" }));
+			box.appendChild(actions);
+			button.setButtonText(at + 1 < steps.length ? "Next step" : "Now the whole problem");
+			button.buttonEl.focus();
+		};
+		const button = new ButtonComponent(actions).setButtonText("Check").setCta().onClick(check);
+		new ButtonComponent(actions).setButtonText("Skip the steps").onClick(() => goTo(steps.length));
+		this.examKeys = {
+			choose: (slot) => options[slot]?.click(),
+			submit: () => check(),
+			next: () => check(),
+			focus: () => button.buttonEl.focus(),
+		};
+		button.buttonEl.focus();
+	}
+
+	/**
+	 * One more try after a miss: Claude's nudge toward what was missed, the
+	 * answer back in the box to rework, and the choice between trying again
+	 * and seeing the model answer. Resolves to the new answer, or null.
+	 */
+	private askSecondTry(wrap: HTMLElement, first: string, nudge: string): Promise<string | null> {
+		return new Promise((resolve) => {
+			const panel = wrap.createDiv({ cls: "rl-feedback rl-fb-partial rl-second-try" });
+			const head = panel.createDiv({ cls: "rl-fb-head" });
+			setIcon(head.createSpan({ cls: "rl-fb-icon" }), "lightbulb");
+			head.createSpan({ cls: "rl-fb-title", text: "Not quite. One more try?" });
+			void this.md(nudge, panel.createDiv({ cls: "rl-fb-body" }));
+			const area = panel.createEl("textarea", { cls: "rl-text", attr: { rows: "4" } });
+			area.value = first;
+			const row = panel.createDiv({ cls: "rl-actions" });
+			const done = (answer: string | null) => {
+				this.settleSecondTry = null;
+				panel.remove();
+				resolve(answer);
+			};
+			const again = new ButtonComponent(row).setButtonText("Try again").setCta().onClick(() => done(area.value));
+			new ButtonComponent(row).setButtonText("Show the answer").onClick(() => done(null));
+			row.createSpan({ cls: "rl-hint", text: `A second try can earn up to ${Math.round(SECOND_TRY_CAP * 100)}%.` });
+			this.settleSecondTry = () => done(null);
+			this.examKeys = {
+				choose: () => undefined,
+				submit: () => done(area.value),
+				next: () => done(area.value),
+				focus: () => again.buttonEl.focus(),
+			};
+			window.setTimeout(() => area.focus(), 0);
+		});
 	}
 
 	/**
@@ -1315,8 +1460,26 @@ export class RecallLabView extends ItemView {
 		const unready = gaveUp ? null : notReady(q, state);
 		if (unready) { new Notice(unready); return; }
 		this.revealed = true;
+		let saved!: () => void;
+		this.submitting = new Promise<void>((resolve) => (saved = resolve));
+		try {
+			await this.mark(item, state, wrap, gaveUp, confidence);
+		} finally {
+			saved();
+		}
+	}
+
+	private async mark(
+		item: ExamItem, state: AnswerState, wrap: HTMLElement, gaveUp: boolean, confidence?: Confidence
+	): Promise<void> {
+		const q = item.q;
+		// Taken now: Claude's marking can land after the exam has ended, or
+		// after another has begun, and the answer belongs to this one.
+		const at = { sessionId: this.sessionId, ts: new Date().toISOString() };
+		const index = this.index;
+		const onScreen = () => this.screen === "exam" && this.sessionId === at.sessionId && this.index === index;
 		const ms = Date.now() - this.questionStart;
-		const extra: Pick<Attempt, "confidence" | "recalled"> = {};
+		const extra: Pick<Attempt, "confidence" | "recalled" | "nudged"> = {};
 		if (confidence && q.type !== "trace") extra.confidence = confidence;
 		if (state.recalled !== undefined) extra.recalled = state.recalled;
 
@@ -1326,7 +1489,7 @@ export class RecallLabView extends ItemView {
 
 		const live: LiveAnswer = { q, bankId: item.bankId, response: describeResponse(q, state), image: state.image, ms };
 		if (local) {
-			live.attempt = this.attemptFrom(item, live.response, local.score, local.verdict, local.feedback, local.missing, "local", ms, extra);
+			live.attempt = this.attemptFrom(item, at, live.response, local.score, local.verdict, local.feedback, local.missing, "local", ms, extra);
 			this.keep(live.attempt);
 			this.answers.push(live);
 			this.showFeedback(q, live, wrap);
@@ -1335,20 +1498,43 @@ export class RecallLabView extends ItemView {
 
 		// Open answer: Claude marks it now, in place. No queue, no commands.
 		this.answers.push(live);
-		const panel = this.showFeedback(q, live, wrap, true);
+		let pending = this.showFeedback(q, live, wrap, true);
 		this.plugin.log.info("marking an open answer", { question: q.id, type: q.type });
-		const marked = await this.plugin.tasks.markAnswer(q, state.text, state.image);
+		let marked = await this.plugin.tasks.markAnswer(q, state.text, state.image);
+
+		// A miss that came with a nudge gets one more try before the answer
+		// shows, but only while its exam is still on screen: one ended or
+		// replaced meanwhile has nowhere to ask, and the first mark stands.
+		if (!("error" in marked) && marked.nudge && this.plugin.settings.secondTry && onScreen()) {
+			pending.remove();
+			const retry = await this.askSecondTry(wrap, state.text, marked.nudge);
+			pending = retry === null ? wrap.createDiv() : this.showFeedback(q, live, wrap, true);
+			if (retry !== null) {
+				this.plugin.log.info("second try", { question: q.id });
+				extra.nudged = true;
+				const second = await this.plugin.tasks.markAnswer(q, retry, state.image);
+				if ("error" in second) {
+					this.plugin.log.error("second try could not be marked", { question: q.id, error: second.error });
+					new Notice(`Claude could not mark your second try, so your first answer stands: ${second.error}`, 10000);
+				} else {
+					const both = combineTries(marked, second);
+					if (both.secondWon) live.response = retry;
+					marked = both;
+				}
+			}
+		}
+
 		if ("error" in marked) {
 			this.plugin.log.error("marking failed", { question: q.id, error: marked.error });
-			live.attempt = this.attemptFrom(item, live.response, 0, "incorrect",
+			live.attempt = this.attemptFrom(item, at, live.response, 0, "incorrect",
 				`Could not reach Claude to mark this: ${marked.error}`, [q.topic], "error", ms, extra);
 		} else {
 			this.plugin.log.info("answer marked", { question: q.id, score: marked.score });
-			live.attempt = this.attemptFrom(item, live.response, marked.score, marked.verdict,
+			live.attempt = this.attemptFrom(item, at, live.response, marked.score, marked.verdict,
 				[marked.feedback, marked.improve].filter(Boolean).join(" "), marked.missing, "ai", ms, extra);
 		}
 		this.keep(live.attempt);
-		panel.remove();
+		pending.remove();
 		this.showFeedback(q, live, wrap);
 	}
 
@@ -1366,13 +1552,13 @@ export class RecallLabView extends ItemView {
 	 * no bank, so the answer would never reach the radar.
 	 */
 	private attemptFrom(
-		item: ExamItem, response: string, score: number, verdict: Attempt["verdict"],
+		item: ExamItem, at: { sessionId: string; ts: string }, response: string, score: number, verdict: Attempt["verdict"],
 		feedback: string, missing: string[], gradedBy: Attempt["gradedBy"], ms: number,
-		extra: Pick<Attempt, "confidence" | "recalled"> = {}
+		extra: Pick<Attempt, "confidence" | "recalled" | "nudged"> = {}
 	): Attempt {
 		const q = item.q;
 		return {
-			ts: new Date().toISOString(), sessionId: this.sessionId, bankId: item.bankId,
+			ts: at.ts, sessionId: at.sessionId, bankId: item.bankId,
 			questionId: idOf(item), tier: q.tier, type: q.type, topic: q.topic,
 			response, score, verdict, feedback, missing, gradedBy, ms,
 			...(item.of ? { variant: q.id } : {}),
@@ -1393,7 +1579,8 @@ export class RecallLabView extends ItemView {
 			const head = panel.createDiv({ cls: "rl-fb-head" });
 			head.createDiv({ cls: "rl-spinner" });
 			head.createSpan({ cls: "rl-fb-title", text: "Claude is marking this…" });
-			if (q.expected) {
+			// With a second try possible, the model answer waits until it is over.
+			if (q.expected && !this.plugin.settings.secondTry) {
 				const model = panel.createDiv({ cls: "rl-model" });
 				model.createDiv({ cls: "rl-model-label", text: "Model answer" });
 				void this.md(q.expected, model.createDiv());
@@ -1439,6 +1626,7 @@ export class RecallLabView extends ItemView {
 	private async advance(): Promise<void> {
 		this.revealed = false;
 		this.recallStage = null;
+		this.guideStage = null;
 		if (this.index === this.examItems.length - 1) { await this.finish(); return; }
 		this.index += 1;
 		this.questionStart = Date.now();
@@ -1448,6 +1636,15 @@ export class RecallLabView extends ItemView {
 	// ================================================================ results
 
 	private async finish(): Promise<void> {
+		// Ending mid second try keeps the first answer as it was marked. It is
+		// saved a moment later; wait for that, so the summary counts it. An
+		// answer Claude is still marking is not waited for: it is saved, under
+		// this session, when the marking lands.
+		const settle = this.settleSecondTry;
+		if (settle) {
+			settle();
+			await this.submitting;
+		}
 		const graded = this.answers.filter((a) => a.attempt).map((a) => a.attempt!);
 		// A marking that failed says nothing about what you know.
 		const marked = graded.filter(counts);

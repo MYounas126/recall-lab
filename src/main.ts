@@ -8,6 +8,7 @@ import { Log } from "./log";
 import { ConfirmModal, RecallLabView, VIEW_TYPE_RECALL } from "./view";
 import { Bank, Course, Question } from "./types";
 import { needingVariants } from "./variants";
+import { needingSteps } from "./guided";
 import { Leech } from "./leeches";
 import { SerialQueue } from "./util";
 import { AnswerIndex } from "./history";
@@ -126,6 +127,7 @@ export default class RecallLabPlugin extends Plugin {
 		});
 		this.addCommand({ id: "remove-leftovers", name: "Remove leftover quizzes, labs and courses", callback: () => void this.removeLeftovers() });
 		this.addCommand({ id: "write-variants", name: "Write variants for mature questions", callback: () => void this.offerVariants() });
+		this.addCommand({ id: "write-steps", name: "Write guided steps for brutal problems", callback: () => void this.offerSteps() });
 
 		// The "Complete" footer at the bottom of every note inside a course folder.
 		this.registerEvent(this.app.workspace.on("file-open", () => this.queueFooters()));
@@ -611,10 +613,12 @@ export default class RecallLabPlugin extends Plugin {
 	}
 
 	/**
-	 * Writes variants for mature questions, one Claude request per quiz, each
-	 * through the generation queue. Only ever started from a confirmation.
+	 * Writes variants for mature questions, or guided steps for brutal
+	 * problems: one Claude request per quiz, each through the generation
+	 * queue. Only ever started from a confirmation.
 	 */
-	async buildVariants(targets: { bank: Bank; questions: Question[] }[]): Promise<void> {
+	async buildExtras(kind: "variants" | "steps", targets: { bank: Bank; questions: Question[] }[]): Promise<void> {
+		const label = kind === "variants" ? "variants" : "guided steps";
 		let added = 0;
 		let failed = 0;
 		let elsewhere = 0;
@@ -624,11 +628,14 @@ export default class RecallLabPlugin extends Plugin {
 			let res: number | { error: string } | null;
 			try {
 				const path = this.store.bankPath(bank.id);
-				res = await this.build(`variants:${bank.id}`, `variants for "${bank.title}"`, async () => {
-					this.log.info("writing variants", { bank: bank.id, questions: questions.length });
-					const notice = new Notice(`Writing variants for "${bank.title}"…`, 0);
+				const ids = questions.map((q) => q.id);
+				res = await this.build(`${kind}:${bank.id}`, `${label} for "${bank.title}"`, async () => {
+					this.log.info(`writing ${label}`, { bank: bank.id, questions: ids.length });
+					const notice = new Notice(`Writing ${label} for "${bank.title}"…`, 0);
 					try {
-						return await this.tasks.generateVariants(bank, path, questions.map((q) => q.id));
+						return kind === "variants"
+							? await this.tasks.generateVariants(bank, path, ids)
+							: await this.tasks.generateSteps(bank, path, ids);
 					} finally {
 						notice.hide();
 					}
@@ -640,18 +647,37 @@ export default class RecallLabPlugin extends Plugin {
 				elsewhere += 1; // already queued, or the plugin is unloading
 			} else if (typeof res === "number") {
 				added += res;
-				this.log.info("variants written", { bank: bank.id, added: res });
+				this.log.info(`${label} written`, { bank: bank.id, added: res });
 			} else {
 				failed += 1;
-				this.log.error("variants failed", { bank: bank.id, error: res.error });
+				this.log.error(`${label} failed`, { bank: bank.id, error: res.error });
 			}
 		}
 		if (this.unloaded) return;
-		const parts = [`Wrote ${added} variant${added === 1 ? "" : "s"}`];
+		const parts = [kind === "variants"
+			? `Wrote ${added} variant${added === 1 ? "" : "s"}`
+			: `Added guided steps to ${added} problem${added === 1 ? "" : "s"}`];
 		if (failed) parts.push(`${failed} quiz${failed === 1 ? "" : "zes"} failed (see the log)`);
 		if (elsewhere) parts.push(`${elsewhere} already queued`);
 		new Notice(`${parts.join("; ")}.`, 8000);
 		await this.refreshView();
+	}
+
+	/** Offers to break every brutal problem without guided steps into steps, across all courses. */
+	private async offerSteps(): Promise<void> {
+		const needing = needingSteps(await this.store.listBanks());
+		const n = needing.reduce((s, b) => s + b.questions.length, 0);
+		if (!n) {
+			new Notice("Every brutal problem already has guided steps.");
+			return;
+		}
+		new ConfirmModal(
+			this.app,
+			`Write guided steps for ${n} brutal problem${n === 1 ? "" : "s"}?`,
+			`Claude breaks each into 3 to 5 smaller steps, one request per quiz (${needing.length}). This uses your Claude plan.`,
+			"Write steps",
+			() => void this.buildExtras("steps", needing)
+		).open();
 	}
 
 	/**
@@ -694,7 +720,7 @@ export default class RecallLabPlugin extends Plugin {
 			`Write variants for ${n} question${n === 1 ? "" : "s"}?`,
 			`Claude writes two variants of each, one request per quiz (${needing.length}). This uses your Claude plan.`,
 			"Write variants",
-			() => void this.buildVariants(needing)
+			() => void this.buildExtras("variants", needing)
 		).open();
 	}
 

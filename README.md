@@ -51,6 +51,19 @@ be reached, the answer is recorded as 0 with the reason, so an exam never
 stalls. **Strictness** (lenient, normal or brutal) is set in settings and
 written into every marking request.
 
+**Second try.** When Claude marks a written answer as not right, it also asks
+one nudging question that points at what was missed without giving it away.
+You can try again before the model answer shows; the second try is marked
+again (one more Claude request), earns at most 75%, and brings the question
+back soon, since it needed the nudge. Settings → Questions turns this off.
+
+**Guided steps.** A brutal problem can carry 3 to 5 smaller steps that walk up
+to it, each a question marked on your device. When the problem is new to you,
+or you missed it last time, you work through the steps first, each checked at
+once, then answer the whole problem unaided. Steps are written per course on
+request (*Write guided steps*, which uses Claude), and step answers are not
+recorded.
+
 **Recall before recognition** (Settings → Questions, or *Recall first* in the
 exam bar) hides the options of multiple-choice and select-all questions until
 you have typed, or just thought of, your answer. Producing an answer builds
