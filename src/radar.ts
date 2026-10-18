@@ -207,6 +207,28 @@ export function renderRadar(parent: HTMLElement, scores: AxisScore[], opts: Rada
 			attr: { x: x.toFixed(1), y: (top + lines.length * LINE).toFixed(1), "text-anchor": anchor },
 		}).textContent = sub;
 	});
+
+	fitHeight(svg, w);
+}
+
+/**
+ * Trims the empty band above and below the wheel. Few spokes leave it
+ * lopsided in its box (a triangle has nothing below its base), so the height
+ * follows what was drawn; the width stays, so the wheel keeps its size. It
+ * needs the svg laid out: in a hidden pane, or without getBBox, the box is
+ * left as it was.
+ */
+function fitHeight(svg: SVGSVGElement, w: number): void {
+	if (typeof svg.getBBox !== "function") return;
+	let box: DOMRect;
+	try {
+		box = svg.getBBox();
+	} catch {
+		return;
+	}
+	if (!box.height) return;
+	const pad = 18;
+	svg.setAttribute("viewBox", `0 ${(box.y - pad).toFixed(1)} ${w} ${(box.height + 2 * pad).toFixed(1)}`);
 }
 
 /** Greedy word wrap, so a long axis name becomes two or three short lines. */

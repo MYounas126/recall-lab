@@ -308,6 +308,8 @@ export interface LabProgress {
 	/** Wrong flags submitted. */
 	attempts: number;
 	hintsUsed: number;
+	/** sha256 of each wrong flag submitted, so trying one again costs nothing. */
+	wrongFlags?: string[];
 	solvedAt?: string;
 	gaveUpAt?: string;
 	firstOpenedAt?: string;
