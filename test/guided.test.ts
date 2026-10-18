@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import { strict as assert } from "node:assert";
 import { needingSteps, needsGuidance } from "../src/guided";
-import { SECOND_TRY_CAP, Tasks, checkStep, combineTries, markPrompt, stepsPrompt } from "../src/tasks";
+import { SECOND_TRY_CAP, Tasks, checkStep, checkVariant, combineTries, markPrompt, stepsPrompt } from "../src/tasks";
 import type { Bank } from "../src/types";
 import { attempt, makeVault, question } from "./helpers";
 
@@ -22,10 +22,11 @@ test("only brutal problems without steps need them", () => {
 
 test("a guided step must be marked on the device, and inherits its problem's place", () => {
 	const s = question("x", { tier: "brutal", topic: "other" });
-	assert.equal(checkStep(question("p", { topic: "regs", axis: "ax", ref: "N#H" }), s), null);
+	assert.equal(checkStep(question("p", { tier: "brutal", topic: "regs", axis: "ax", ref: "N#H" }), s), null);
 	assert.deepEqual([s.tier, s.topic, s.axis, s.ref], ["easy", "regs", "ax", "N#H"]);
 	assert.match(checkStep(problem, question("x", { type: "short", expected: "y" }))!, /cannot be checked at once/);
 	assert.match(checkStep(problem, question("x", { type: "cloze", cloze: "no blanks" }))!, /no blanks/);
+	assert.match(checkStep(question("p"), question("x"))!, /not a brutal problem/, "steps are for brutal problems only");
 });
 
 test("the steps prompt lists the allowed types and leaves old steps out", () => {
@@ -53,6 +54,31 @@ test("steps replace an old set, and a set needs at least two usable steps", asyn
 	assert.equal(saved.questions[1].steps, undefined, "one usable step is not a walk-through");
 });
 
+test("steps written for a problem rebuilt meanwhile are not attached to what replaced it", async () => {
+	const vault = makeVault(0);
+	const path = "_quiz/banks/a.json";
+	const bank: Bank = { id: "a", title: "A", questions: [question("p", { tier: "brutal", prompt: "Exploit the overflow." })] };
+	vault.files.set(path, JSON.stringify(bank));
+	const mcq = (p: string) => ({ type: "mcq", prompt: p, choices: ["a", "b"], answer: 0, explain: "" });
+	const cli = {
+		askJson: async () => {
+			// Rebuilt while queued: p is now an easy question about something else.
+			vault.files.set(path, JSON.stringify({ ...bank, questions: [question("p", { prompt: "What does XOR EAX, EAX do?" })] }));
+			return { ok: true, data: { steps: { p: [mcq("frame step 1"), mcq("frame step 2")] } } };
+		},
+	};
+	const tasks = new Tasks({ vault } as never, cli as never, {} as never, () => "normal", () => "_quiz/banks", () => "_quiz/courses");
+	const res = await tasks.generateSteps(bank, path, ["p"]);
+	assert.ok(typeof res === "object" && /changed/.test(res.error), JSON.stringify(res));
+	assert.equal((JSON.parse(vault.files.get(path)!) as Bank).questions[0].steps, undefined);
+});
+
+test("a variant or practice question never keeps steps echoed from its original", () => {
+	const v = question("v", { tier: "brutal", steps: [question("s")] });
+	assert.equal(checkVariant(question("o", { tier: "brutal" }), v), null);
+	assert.equal(v.steps, undefined);
+});
+
 test("the marking prompt asks for a nudge that does not give the answer away", () => {
 	const prompt = markPrompt(question("s", { type: "short", expected: "RAX", rubric: ["names RAX"] }), "RBX", false, "normal");
 	assert.match(prompt, /"nudge"/);
@@ -77,7 +103,11 @@ test("a second try is capped, and never counts as fully right", () => {
 	assert.equal(perfect.score, Math.round(100 * SECOND_TRY_CAP));
 	assert.equal(perfect.verdict, "partial");
 	assert.match(perfect.feedback, /^Second try: f2/);
-	const worse = combineTries({ ...first, score: 50 }, { score: 30, verdict: "incorrect", feedback: "", missing: [] });
+	assert.equal(perfect.secondWon, true);
+	const worse = combineTries({ ...first, score: 50 }, { score: 30, verdict: "incorrect", feedback: "f3", missing: ["b"] });
 	assert.equal(worse.score, 50, "a worse second try never lowers the first");
+	assert.equal(worse.secondWon, false);
+	assert.match(worse.feedback, /^Your first try stands: f1/, "the winning try's feedback");
+	assert.deepEqual(worse.missing, ["a"]);
 	assert.equal(combineTries(first, { score: 10, verdict: "incorrect", feedback: "", missing: [] }).verdict, "incorrect");
 });

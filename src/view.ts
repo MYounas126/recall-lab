@@ -74,6 +74,8 @@ export class RecallLabView extends ItemView {
 	private guideStage: { index: number; step: number } | null = null;
 	/** Ends a second try that is waiting on you, as "show the answer". */
 	private settleSecondTry: (() => void) | null = null;
+	/** Resolves once the answer last submitted has been marked and saved. */
+	private submitting: Promise<void> | null = null;
 	/** Recall-first state for the question on screen. */
 	private recallStage: RecallStage | null = null;
 	/** What the keyboard can do to the question on screen. */
@@ -105,6 +107,11 @@ export class RecallLabView extends ItemView {
 		this.contentEl.tabIndex = -1;
 		this.registerDomEvent(this.containerEl, "keydown", (e) => this.onKey(e));
 		await this.render();
+	}
+
+	async onClose(): Promise<void> {
+		// A second try still open keeps the first answer, which is then saved.
+		this.settleSecondTry?.();
 	}
 
 	/** Keyboard shortcuts on the exam screen; see keyAction for the map. */
@@ -919,6 +926,8 @@ export class RecallLabView extends ItemView {
 
 	private async launch(bank: Bank, picked: ExamItem[], kind: "exam" | "review" = "exam"): Promise<void> {
 		if (!picked.length) { new Notice("Recall Lab: that quiz has no questions."); return; }
+		// A second try left open on the last exam keeps its first answer.
+		this.settleSecondTry?.();
 		// A problem with guided steps is walked through them when it is new to
 		// you or was missed last time; otherwise it is asked unaided.
 		if (this.plugin.settings.guidedSteps && picked.some((it) => it.q.steps?.length)) {
@@ -1451,6 +1460,24 @@ export class RecallLabView extends ItemView {
 		const unready = gaveUp ? null : notReady(q, state);
 		if (unready) { new Notice(unready); return; }
 		this.revealed = true;
+		let saved!: () => void;
+		this.submitting = new Promise<void>((resolve) => (saved = resolve));
+		try {
+			await this.mark(item, state, wrap, gaveUp, confidence);
+		} finally {
+			saved();
+		}
+	}
+
+	private async mark(
+		item: ExamItem, state: AnswerState, wrap: HTMLElement, gaveUp: boolean, confidence?: Confidence
+	): Promise<void> {
+		const q = item.q;
+		// Taken now: Claude's marking can land after the exam has ended, or
+		// after another has begun, and the answer belongs to this one.
+		const at = { sessionId: this.sessionId, ts: new Date().toISOString() };
+		const index = this.index;
+		const onScreen = () => this.screen === "exam" && this.sessionId === at.sessionId && this.index === index;
 		const ms = Date.now() - this.questionStart;
 		const extra: Pick<Attempt, "confidence" | "recalled" | "nudged"> = {};
 		if (confidence && q.type !== "trace") extra.confidence = confidence;
@@ -1462,7 +1489,7 @@ export class RecallLabView extends ItemView {
 
 		const live: LiveAnswer = { q, bankId: item.bankId, response: describeResponse(q, state), image: state.image, ms };
 		if (local) {
-			live.attempt = this.attemptFrom(item, live.response, local.score, local.verdict, local.feedback, local.missing, "local", ms, extra);
+			live.attempt = this.attemptFrom(item, at, live.response, local.score, local.verdict, local.feedback, local.missing, "local", ms, extra);
 			this.keep(live.attempt);
 			this.answers.push(live);
 			this.showFeedback(q, live, wrap);
@@ -1475,29 +1502,35 @@ export class RecallLabView extends ItemView {
 		this.plugin.log.info("marking an open answer", { question: q.id, type: q.type });
 		let marked = await this.plugin.tasks.markAnswer(q, state.text, state.image);
 
-		// A miss that came with a nudge gets one more try before the answer shows.
-		if (!("error" in marked) && marked.nudge && this.plugin.settings.secondTry) {
+		// A miss that came with a nudge gets one more try before the answer
+		// shows, but only while its exam is still on screen: one ended or
+		// replaced meanwhile has nowhere to ask, and the first mark stands.
+		if (!("error" in marked) && marked.nudge && this.plugin.settings.secondTry && onScreen()) {
 			pending.remove();
 			const retry = await this.askSecondTry(wrap, state.text, marked.nudge);
 			pending = retry === null ? wrap.createDiv() : this.showFeedback(q, live, wrap, true);
 			if (retry !== null) {
 				this.plugin.log.info("second try", { question: q.id });
+				extra.nudged = true;
 				const second = await this.plugin.tasks.markAnswer(q, retry, state.image);
-				if (!("error" in second)) {
-					marked = combineTries(marked, second);
-					live.response = retry;
-					extra.nudged = true;
+				if ("error" in second) {
+					this.plugin.log.error("second try could not be marked", { question: q.id, error: second.error });
+					new Notice(`Claude could not mark your second try, so your first answer stands: ${second.error}`, 10000);
+				} else {
+					const both = combineTries(marked, second);
+					if (both.secondWon) live.response = retry;
+					marked = both;
 				}
 			}
 		}
 
 		if ("error" in marked) {
 			this.plugin.log.error("marking failed", { question: q.id, error: marked.error });
-			live.attempt = this.attemptFrom(item, live.response, 0, "incorrect",
+			live.attempt = this.attemptFrom(item, at, live.response, 0, "incorrect",
 				`Could not reach Claude to mark this: ${marked.error}`, [q.topic], "error", ms, extra);
 		} else {
 			this.plugin.log.info("answer marked", { question: q.id, score: marked.score });
-			live.attempt = this.attemptFrom(item, live.response, marked.score, marked.verdict,
+			live.attempt = this.attemptFrom(item, at, live.response, marked.score, marked.verdict,
 				[marked.feedback, marked.improve].filter(Boolean).join(" "), marked.missing, "ai", ms, extra);
 		}
 		this.keep(live.attempt);
@@ -1519,13 +1552,13 @@ export class RecallLabView extends ItemView {
 	 * no bank, so the answer would never reach the radar.
 	 */
 	private attemptFrom(
-		item: ExamItem, response: string, score: number, verdict: Attempt["verdict"],
+		item: ExamItem, at: { sessionId: string; ts: string }, response: string, score: number, verdict: Attempt["verdict"],
 		feedback: string, missing: string[], gradedBy: Attempt["gradedBy"], ms: number,
 		extra: Pick<Attempt, "confidence" | "recalled" | "nudged"> = {}
 	): Attempt {
 		const q = item.q;
 		return {
-			ts: new Date().toISOString(), sessionId: this.sessionId, bankId: item.bankId,
+			ts: at.ts, sessionId: at.sessionId, bankId: item.bankId,
 			questionId: idOf(item), tier: q.tier, type: q.type, topic: q.topic,
 			response, score, verdict, feedback, missing, gradedBy, ms,
 			...(item.of ? { variant: q.id } : {}),
@@ -1603,9 +1636,15 @@ export class RecallLabView extends ItemView {
 	// ================================================================ results
 
 	private async finish(): Promise<void> {
-		// Ending mid second try takes the first answer as it was marked; it is
-		// saved as soon as that settles.
-		this.settleSecondTry?.();
+		// Ending mid second try keeps the first answer as it was marked. It is
+		// saved a moment later; wait for that, so the summary counts it. An
+		// answer Claude is still marking is not waited for: it is saved, under
+		// this session, when the marking lands.
+		const settle = this.settleSecondTry;
+		if (settle) {
+			settle();
+			await this.submitting;
+		}
 		const graded = this.answers.filter((a) => a.attempt).map((a) => a.attempt!);
 		// A marking that failed says nothing about what you know.
 		const marked = graded.filter(counts);

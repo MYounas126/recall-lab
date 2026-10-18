@@ -23,17 +23,22 @@ export const SECOND_TRY_CAP = 0.75;
 
 /**
  * The mark for an answer given again after a nudge. It keeps the better of
- * the first score and the capped second, and is never "correct": an answer
- * that needed a nudge is partly known, which schedules it to come back soon.
+ * the first score and the capped second, with that try's feedback, and is
+ * never "correct": an answer that needed a nudge is partly known, which
+ * schedules it to come back soon. `secondWon` says which try the mark is.
  */
-export function combineTries(first: MarkResult, second: MarkResult): MarkResult {
-	const score = Math.max(first.score, Math.round(second.score * SECOND_TRY_CAP));
+export function combineTries(first: MarkResult, second: MarkResult): MarkResult & { secondWon: boolean } {
+	const capped = Math.round(second.score * SECOND_TRY_CAP);
+	const secondWon = capped > first.score;
+	const won = secondWon ? second : first;
+	const score = Math.max(first.score, capped);
 	return {
 		score,
 		verdict: score >= 40 ? "partial" : "incorrect",
-		feedback: `Second try: ${second.feedback}`.trim(),
-		missing: second.missing,
-		improve: second.improve,
+		feedback: (secondWon ? `Second try: ${second.feedback}` : `Your first try stands: ${first.feedback}`).trim(),
+		missing: won.missing,
+		improve: won.improve,
+		secondWon,
 	};
 }
 
@@ -562,7 +567,7 @@ export function labPrompt(
 
 /** The prompt that asks Claude to diagnose a leech. Pure, so it can be tested. */
 export function leechPrompt(q: Question, wrong: Attempt[], noteTitle: string, noteContent: string): string {
-	const { variants: _v, ...question } = q;
+	const { variants: _v, steps: _s, ...question } = q;
 	return [
 		"A learner keeps getting the question below wrong. Diagnose why. Reply with ONLY a JSON object, no prose",
 		"and no code fence.",
@@ -640,7 +645,7 @@ export function variantPrompt(title: string, content: string, questions: Questio
 		'SHAPE: {"variants":{"<original id>":[{"type":"...","prompt":"...", ...every field the type needs..., "explain":"..."}]}}',
 		"",
 		"QUESTIONS:",
-		JSON.stringify(questions.map(({ variants: _v, ...q }) => q), null, 1),
+		JSON.stringify(questions.map(({ variants: _v, steps: _s, ...q }) => q), null, 1),
 		"",
 		`NOTE TITLE: ${title}`,
 		"NOTE CONTENT:",
@@ -664,7 +669,10 @@ export function checkVariant(original: Question, v: Question): string | null {
 	if (original.axis) v.axis = original.axis;
 	if (original.ref) v.ref = original.ref;
 	if (!v.explain) v.explain = "";
+	// A variant or a practice question is asked as it is: steps echoed from
+	// the original were never checked, and could not be marked.
 	delete v.variants;
+	delete v.steps;
 	return checkFields(v);
 }
 
@@ -700,6 +708,7 @@ const STEP_TYPES: readonly QuestionType[] = ["mcq", "multi", "cloze", "order", "
  * types are allowed; they inherit the problem's topic, axis and ref.
  */
 export function checkStep(problem: Question, s: Question): string | null {
+	if (problem.tier !== "brutal") return "belongs to a question that is not a brutal problem";
 	if (!s || typeof s !== "object") return "is not a question";
 	if (!STEP_TYPES.includes(s.type)) return `is a ${s.type} question, which cannot be checked at once`;
 	if (!s.prompt?.trim()) return "has no prompt";
