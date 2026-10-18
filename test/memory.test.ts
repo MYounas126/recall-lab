@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import { strict as assert } from "node:assert";
 import { Rating } from "ts-fsrs";
-import { Memory, Pace, dayOffset, describeWhen, keyOf, keysOf, planReview, ratingFor } from "../src/memory";
+import {
+	Memory, Pace, dailyRecord, dayOffset, describeWhen, endOfDay, keyOf, keysOf, planReview, ratingFor, streakOf,
+} from "../src/memory";
 import { AnswerIndex } from "../src/history";
 import { Store } from "../src/store";
 import { qkey, type Bank } from "../src/types";
@@ -198,6 +200,31 @@ test("the day's allowance counts new questions already met today", () => {
 
 test("keysOf covers every item", () => {
 	assert.equal(keysOf(Store.itemsOf(banks)).size, 7);
+});
+
+test("the daily record counts answers and whether each day ended clear", () => {
+	const at = (daysAgo: number) => new Date(2026, 9, 18 - daysAgo, 10, 0).toISOString();
+	const history = [attempt("a", "q1", 0, at(3)), attempt("a", "q1", 100, at(1))];
+	const days = dailyRecord(history, 0.9, new Set([qkey("a", "q1")]), NOW);
+	assert.equal(days.length, 4, "from the first answer to today");
+	assert.deepEqual(days.map((d) => d.answers), [1, 0, 1, 0]);
+	// Missed on day -3, so due on day -2, which passed with no review.
+	assert.deepEqual(days.map((d) => d.clear), [true, false, true, days[3].clear]);
+	assert.equal(days[0].day, new Date(2026, 9, 15).getTime());
+});
+
+test("the streak counts clear days in a row, and today cannot break it", () => {
+	const d = (clear: boolean) => ({ day: 0, answers: 1, clear });
+	assert.deepEqual(streakOf([d(true), d(false), d(true), d(true), d(false)]), { current: 2, longest: 2, today: false });
+	assert.deepEqual(streakOf([d(true), d(true), d(true)]), { current: 3, longest: 3, today: true });
+	assert.deepEqual(streakOf([d(true), d(true), d(false), d(false)]), { current: 0, longest: 2, today: false });
+	assert.deepEqual(streakOf([]), { current: 0, longest: 0, today: false });
+});
+
+test("endOfDay is the last millisecond of the local day", () => {
+	const end = endOfDay(NOW);
+	assert.equal(end.getDate(), NOW.getDate());
+	assert.equal(new Date(end.getTime() + 1).getHours(), 0);
 });
 
 test("describeWhen speaks plainly", () => {
