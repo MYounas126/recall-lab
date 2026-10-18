@@ -399,21 +399,33 @@ export class RecallLabView extends ItemView {
 	/** Starts today's review: across every course, or one course. */
 	async startReview(course?: Course): Promise<void> {
 		await this.refresh();
-		const banks = course ? Store.banksForCourse(course, this.banks) : this.banks;
+		await this.review(
+			course ? Store.banksForCourse(course, this.banks) : this.banks,
+			course ? `review:${course.id}` : "review",
+			course ? `Review · ${course.title}` : "Daily review"
+		);
+	}
+
+	/**
+	 * Reviews what is due in one note. New questions are left to the daily
+	 * review: from here they would spend the whole vault's allowance on one note.
+	 */
+	async startNoteReview(path: string): Promise<void> {
+		await this.refresh();
+		const name = path.split("/").pop()!.replace(/\.md$/, "");
+		await this.review(this.banks.filter((b) => b.note === path), `review:${path}`, `Review · ${name}`, true);
+	}
+
+	private async review(banks: Bank[], id: string, title: string, dueOnly = false): Promise<void> {
 		const { plan, memory, keys } = await this.planFor(banks);
-		const items = [...plan.due, ...plan.fresh];
+		const items = dueOnly ? plan.due : [...plan.due, ...plan.fresh];
 		if (!items.length) {
 			const now = new Date();
 			const next = memory.nextDue(endOfDay(now), keys);
 			new Notice(next ? `Nothing to review. The next question is due ${describeWhen(next, now)}.` : "Nothing to review yet.");
 			return;
 		}
-		const paper: Bank = {
-			id: course ? `review:${course.id}` : "review",
-			title: course ? `Review · ${course.title}` : "Daily review",
-			questions: [],
-		};
-		await this.launch(paper, items, "review");
+		await this.launch({ id, title, questions: [] }, items, "review");
 	}
 
 	private renderLegend(panel: HTMLElement, scores: AxisScore[], onClick?: (id: string) => void): void {
@@ -1006,6 +1018,7 @@ export class RecallLabView extends ItemView {
 
 		this.screen = "results";
 		await this.render();
+		void this.plugin.refreshMemoryViews();
 
 		// An exam's coaching is fetched right away and dropped into the panel
 		// when it lands. A review stays offline; its feedback is one click away.

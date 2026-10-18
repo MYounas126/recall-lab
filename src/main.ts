@@ -1,4 +1,4 @@
-import { MarkdownView, Notice, Plugin, TFile, TFolder, WorkspaceLeaf, normalizePath } from "obsidian";
+import { MarkdownView, Notice, Plugin, TFile, TFolder, WorkspaceLeaf, normalizePath, setIcon, setTooltip } from "obsidian";
 import { DEFAULT_SETTINGS, RecallLabSettingTab, RecallLabSettings } from "./settings";
 import { Store } from "./store";
 import { ClaudeCli } from "./claude";
@@ -6,8 +6,26 @@ import { Tasks } from "./tasks";
 import { LabStore } from "./labs";
 import { Log } from "./log";
 import { ConfirmModal, RecallLabView, VIEW_TYPE_RECALL } from "./view";
-import { Course } from "./types";
+import { Bank, Course } from "./types";
 import { SerialQueue } from "./util";
+import { AnswerIndex } from "./history";
+import { Memory, dateKey, describeAgo, endOfDay, expectedScore, keyOf } from "./memory";
+import { NoteMemory, describeSection, dotLevel, headingKey, noteMemory } from "./notemap";
+
+/** Memory state for the note dots, footers and status bar, shared until something changes. */
+interface MemorySnapshot {
+	/** When it was built, in ms; it goes stale with time as well as with change. */
+	at: number;
+	banks: Bank[];
+	memory: Memory;
+	index: AnswerIndex;
+	scoreOf: (bankId: string, questionId: string) => number | null;
+	/** Questions due by the end of today, across every bank. */
+	due: number;
+}
+
+/** Due counts and expected scores move with the clock, so a snapshot lasts at most this long. */
+const SNAPSHOT_TTL = 10 * 60 * 1000;
 
 export default class RecallLabPlugin extends Plugin {
 	settings!: RecallLabSettings;
@@ -27,6 +45,11 @@ export default class RecallLabPlugin extends Plugin {
 	/** What is queued or building, keyed like "quiz:<note path>". */
 	private building = new Set<string>();
 	private unloaded = false;
+	private snapshot: { at: number; value: Promise<MemorySnapshot> } | null = null;
+	private statusBar: HTMLElement | null = null;
+	/** The local date the memory views were last drawn for. */
+	private memoryDay = dateKey(new Date());
+	private memoryTimer: number | null = null;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -61,7 +84,7 @@ export default class RecallLabPlugin extends Plugin {
 		this.addCommand({
 			id: "start-review",
 			name: "Start today's review",
-			callback: async () => (await this.activate()).startReview(),
+			callback: () => void this.reviewFromOutside((view) => view.startReview()),
 		});
 
 		this.addCommand({
@@ -105,10 +128,41 @@ export default class RecallLabPlugin extends Plugin {
 		this.registerEvent(this.app.workspace.on("file-open", () => this.queueFooters()));
 		this.registerEvent(this.app.workspace.on("layout-change", () => this.queueFooters()));
 		this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.queueFooters()));
+
+		// The memory map: dots on headings, the due count in the status bar.
+		this.registerMarkdownPostProcessor((el, ctx) => this.decorateHeadings(el, ctx.sourcePath));
+		this.statusBar = this.addStatusBarItem();
+		this.statusBar.addClass("mod-clickable", "rl-status", "rl-collapsed");
+		setIcon(this.statusBar.createSpan({ cls: "rl-status-icon" }), "graduation-cap");
+		this.statusBar.createSpan({ cls: "rl-status-text" });
+		setTooltip(this.statusBar, "Start today's review");
+		this.statusBar.onclick = () => void this.reviewFromOutside((view) => view.startReview());
+		// Due counts move with the clock as well as with answers: look every
+		// minute, rebuild once the snapshot has expired, and redraw everything
+		// when a new day starts, so nothing still says "Nothing due" next morning.
+		this.registerInterval(window.setInterval(() => void this.tick(), 60_000));
+
 		this.app.workspace.onLayoutReady(() => {
+			// Any change to a bank or to attempts.json makes the shared memory
+			// state stale. Watched from here: while the vault loads, Obsidian
+			// reports every existing file as created.
+			const watch = (path: string) => {
+				if (
+					path.startsWith(normalizePath(this.settings.banksFolder) + "/") ||
+					path === normalizePath(`${this.settings.progressFolder}/attempts.json`)
+				) {
+					this.memoryChanged();
+				}
+			};
+			this.registerEvent(this.app.vault.on("modify", (f) => watch(f.path)));
+			this.registerEvent(this.app.vault.on("create", (f) => watch(f.path)));
+			this.registerEvent(this.app.vault.on("delete", (f) => watch(f.path)));
+			this.registerEvent(this.app.vault.on("rename", (f, old) => { watch(f.path); watch(old); }));
+
 			// Vault writes are not safe during onload, so the log opens here.
 			this.log.open();
 			this.queueFooters();
+			void this.updateStatusBar();
 			void this.cli.locate().then((where) =>
 				this.log.info("startup CLI check", { found: where ?? "NOT FOUND", model: this.settings.model })
 			);
@@ -121,6 +175,7 @@ export default class RecallLabPlugin extends Plugin {
 		// Builds still waiting in the queue are dropped for the same reason.
 		this.unloaded = true;
 		this.cancelBulk();
+		if (this.memoryTimer) window.clearTimeout(this.memoryTimer);
 		document.querySelectorAll(".rl-note-footer").forEach((el) => el.remove());
 	}
 
@@ -148,6 +203,26 @@ export default class RecallLabPlugin extends Plugin {
 		return leaf.view as RecallLabView;
 	}
 
+	/** Recall Lab's view, if it is open and loaded. */
+	private openView(): RecallLabView | null {
+		const view = this.app.workspace.getLeavesOfType(VIEW_TYPE_RECALL)[0]?.view;
+		return view instanceof RecallLabView ? view : null;
+	}
+
+	/**
+	 * Starts a review from outside Recall Lab's view: a command, the status
+	 * bar or a note's footer. Never over an exam, review or lab in progress,
+	 * which would be dropped without its summary.
+	 */
+	private async reviewFromOutside(start: (view: RecallLabView) => Promise<void>): Promise<void> {
+		const view = await this.activate();
+		if (view.occupied) {
+			new Notice("Finish or end the session in progress first.");
+			return;
+		}
+		await start(view);
+	}
+
 	private async quizNote(file: TFile): Promise<void> {
 		const bank = await this.store.bankForNote(file.path);
 		const view = await this.activate();
@@ -156,6 +231,104 @@ export default class RecallLabPlugin extends Plugin {
 		// The build takes minutes. If an exam or lab was opened meanwhile, the
 		// new quiz waits in the list rather than replacing it.
 		if (id && !view.occupied) await view.startBankById(id);
+	}
+
+	// ------------------------------------------------------- memory map
+
+	/** Memory state for every note, shared by the dots, footers and status bar. */
+	memorySnapshot(): Promise<MemorySnapshot> {
+		if (this.snapshot && Date.now() - this.snapshot.at < SNAPSHOT_TTL) return this.snapshot.value;
+		const value = this.buildSnapshot();
+		this.snapshot = { at: Date.now(), value };
+		// A failed build is not cached, so the next caller tries again.
+		value.catch(() => { if (this.snapshot?.value === value) this.snapshot = null; });
+		return value;
+	}
+
+	private async buildSnapshot(): Promise<MemorySnapshot> {
+		const [banks, progress] = await Promise.all([this.store.listBanks(), this.store.readProgress()]);
+		const retention = this.settings.targetRecall / 100;
+		const memory = new Memory(progress.attempts, retention);
+		const now = new Date();
+		const today = endOfDay(now);
+		return {
+			at: now.getTime(),
+			banks,
+			memory,
+			index: new AnswerIndex(progress.attempts),
+			scoreOf: expectedScore(progress.attempts, retention, now),
+			due: Store.itemsOf(banks).filter((it) => memory.isDue(keyOf(it), today)).length,
+		};
+	}
+
+	/** One note's memory, from the banks that drill it; null if it has none. */
+	private async noteMemoryOf(path: string): Promise<NoteMemory | null> {
+		const snap = await this.memorySnapshot();
+		const banks = snap.banks.filter((b) => b.note === path);
+		if (!banks.length) return null;
+		return noteMemory(banks, snap.memory, snap.scoreOf, (b, q) => snap.index.lastSeen(b, q), new Date());
+	}
+
+	/** Puts a memory dot beside each heading that a note's questions point at, in reading view. */
+	private async decorateHeadings(el: HTMLElement, path: string): Promise<void> {
+		if (!this.settings.memoryMap) return;
+		const headings = Array.from(el.querySelectorAll<HTMLElement>("h1, h2, h3, h4, h5, h6"));
+		if (!headings.length) return;
+		const note = await this.noteMemoryOf(path);
+		if (!note) return;
+		for (const h of headings) {
+			h.querySelector(":scope > .rl-memory-dot")?.remove();
+			const section = note.sections.get(headingKey(h.textContent ?? ""));
+			if (!section) continue;
+			const dot = h.createSpan({ cls: `rl-memory-dot rl-memory-${dotLevel(section.score)}` });
+			setTooltip(dot, describeSection(section));
+		}
+	}
+
+	private async updateStatusBar(): Promise<void> {
+		const bar = this.statusBar;
+		if (!bar) return;
+		const due = this.settings.memoryMap ? (await this.memorySnapshot()).due : 0;
+		bar.querySelector(".rl-status-text")?.setText(`${due} due`);
+		bar.toggleClass("rl-collapsed", !due);
+	}
+
+	/**
+	 * Redraws everything outside Recall Lab's own view that shows memory: the
+	 * status bar, note footers, and the dots in notes open in reading view.
+	 * Called when a session ends rather than after every answer, so an open
+	 * note does not redraw under you mid-review.
+	 */
+	async refreshMemoryViews(): Promise<void> {
+		this.snapshot = null;
+		this.memoryDay = dateKey(new Date());
+		await this.updateStatusBar();
+		await this.renderFooters(true);
+		for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+			// A tab not opened since startup holds a deferred view, not a
+			// MarkdownView, and has nothing drawn to refresh.
+			const view = leaf.view;
+			if (view instanceof MarkdownView && view.getMode() === "preview") view.previewMode.rerender(true);
+		}
+	}
+
+	/** Drops the stale snapshot, and soon redraws the status bar and footers to match. */
+	private memoryChanged(): void {
+		this.snapshot = null;
+		if (this.memoryTimer) window.clearTimeout(this.memoryTimer);
+		this.memoryTimer = window.setTimeout(() => {
+			this.memoryTimer = null;
+			// Mid-session every answer changes attempts.json; the session's end
+			// refreshes everything once instead.
+			if (this.openView()?.occupied) return;
+			void this.updateStatusBar();
+			void this.renderFooters(true);
+		}, 3000);
+	}
+
+	private async tick(): Promise<void> {
+		if (dateKey(new Date()) !== this.memoryDay) await this.refreshMemoryViews();
+		else if (!this.snapshot || Date.now() - this.snapshot.at >= SNAPSHOT_TTL) await this.updateStatusBar();
 	}
 
 	// ------------------------------------------------------- note footer
@@ -169,14 +342,16 @@ export default class RecallLabPlugin extends Plugin {
 
 	/**
 	 * Appends a Complete button to the end of every open note that sits inside a
-	 * course folder. Notes outside every course folder never get one.
+	 * course folder. Notes outside every course folder never get one. `force`
+	 * rebuilds footers already there, so their memory line catches up.
 	 */
-	private async renderFooters(): Promise<void> {
+	private async renderFooters(force = false): Promise<void> {
 		const courses = await this.store.listCourses();
 		const progress = await this.store.readProgress();
 
 		for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
-			const view = leaf.view as MarkdownView;
+			const view = leaf.view;
+			if (!(view instanceof MarkdownView)) continue;
 			const path = view.file?.path;
 			if (!path) continue;
 
@@ -187,23 +362,36 @@ export default class RecallLabPlugin extends Plugin {
 				view.contentEl.querySelector(".cm-sizer"),
 			].filter(Boolean) as HTMLElement[];
 
+			// Worked out only when a footer is built: every answer drops the
+			// snapshot, and rebuilding it to keep an existing footer is waste.
+			let memory: Promise<NoteMemory | null> | null = null;
 			for (const host of hosts) {
 				const existing = host.querySelector(":scope > .rl-note-footer");
 				if (!inCourse) { existing?.remove(); continue; }
 				if (existing) {
-					if (existing.getAttribute("data-path") === path) continue;
+					if (!force && existing.getAttribute("data-path") === path) continue;
 					existing.remove();
 				}
-				this.buildFooter(host, path, Boolean(progress.completed?.[path]));
+				memory ??= this.settings.memoryMap ? this.noteMemoryOf(path) : Promise.resolve(null);
+				this.buildFooter(host, path, Boolean(progress.completed?.[path]), await memory);
 			}
 		}
 	}
 
-	private buildFooter(host: HTMLElement, path: string, done: boolean): void {
+	private buildFooter(host: HTMLElement, path: string, done: boolean, memory: NoteMemory | null): void {
 		const footer = host.createDiv({ cls: "rl-note-footer" });
 		footer.setAttribute("data-path", path);
 
 		const inner = footer.createDiv({ cls: "rl-note-footer-inner" });
+		if (memory?.questions) {
+			const line = inner.createDiv({ cls: "rl-footer-memory" });
+			const last = memory.lastAnswered ? `last reviewed ${describeAgo(new Date(memory.lastAnswered), new Date())}` : "not reviewed yet";
+			line.createSpan({ text: `${memory.due ? `${memory.due} due` : "Nothing due"} · ${last}` });
+			if (memory.due) {
+				const review = line.createEl("button", { cls: "rl-footer-btn", text: `Review this note (${memory.due})` });
+				review.onclick = () => void this.reviewFromOutside((view) => view.startNoteReview(path));
+			}
+		}
 		if (done) {
 			inner.createDiv({ cls: "rl-footer-done", text: "✅ Marked complete" });
 			const again = inner.createEl("button", { cls: "rl-footer-btn", text: "Practise this note" });
@@ -500,8 +688,7 @@ export default class RecallLabPlugin extends Plugin {
 	}
 
 	private async refreshView(): Promise<void> {
-		const leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE_RECALL)[0];
-		if (leaf) await (leaf.view as RecallLabView).rerender();
+		await this.openView()?.rerender();
 	}
 
 	async loadSettings(): Promise<void> {
@@ -510,5 +697,7 @@ export default class RecallLabPlugin extends Plugin {
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+		// Target recall changes every due date, so cached memory state is stale.
+		this.memoryChanged();
 	}
 }

@@ -73,6 +73,15 @@ further. Plain *Submit* claims neither. Mistakes you were sure about get their
 own list on the results screen (they stick unusually well once corrected), and
 History shows how often each level of confidence turned out right.
 
+**Memory map.** In reading view, each heading that questions point at gets a
+dot: green when you would expect to score 80% or more on its questions right
+now, amber from 50%, red below, grey when none has been answered. Hover it for
+the details. Each note's footer shows how many of its questions are due and
+when you last reviewed it, with a **Review this note** button that reviews
+just what is due there (new questions come in the daily review), and the
+status bar shows today's due count; click it to start reviewing. **Settings → Daily
+review → Memory map on notes** turns all three off.
+
 **Streaks and keys.** Your streak counts days that end with nothing overdue,
 not how much you answered, and today cannot break it until it is over. A day
 is recorded once it ends, so changing the target recall later never rewrites

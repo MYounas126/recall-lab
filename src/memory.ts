@@ -212,6 +212,15 @@ export function keysOf(items: ExamItem[]): Set<string> {
 	return new Set(items.map(keyOf));
 }
 
+/** "today", "yesterday", "3 days ago" or "on 21 Sep". */
+export function describeAgo(past: Date, now: Date): string {
+	const days = Math.round((startOfDay(now).getTime() - startOfDay(past).getTime()) / DAY);
+	if (days <= 0) return "today";
+	if (days === 1) return "yesterday";
+	if (days < 30) return `${days} days ago`;
+	return `on ${past.toLocaleDateString(undefined, { day: "numeric", month: "short" })}`;
+}
+
 /** "within the hour", "in 3 hours", "tomorrow", "in 4 days" or "on 21 Oct". */
 export function describeWhen(target: Date, now: Date): string {
 	const ms = target.getTime() - now.getTime();

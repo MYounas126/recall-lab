@@ -479,6 +479,25 @@
 	display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
 }
 .rl-footer-text { flex: 1; min-width: 14rem; color: var(--text-muted); }
+.rl-footer-memory {
+	flex-basis: 100%;
+	display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem;
+	color: var(--text-muted); font-size: var(--font-ui-small);
+	padding-bottom: 0.6rem; margin-bottom: 0.2rem;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.rl-memory-dot {
+	display: inline-block;
+	width: 0.5em; height: 0.5em; border-radius: 50%;
+	margin-left: 0.45em; vertical-align: middle;
+	background: var(--background-modifier-border);
+}
+.rl-memory-good { background: var(--color-green); }
+.rl-memory-fair { background: var(--color-orange); }
+.rl-memory-poor { background: var(--color-red); }
+.rl-status-icon { display: inline-flex; vertical-align: middle; margin-right: 0.25em; }
+.rl-status-icon svg { width: 0.95em; height: 0.95em; }
 .rl-footer-done { flex: 1; font-weight: 600; color: var(--color-green); }
 .rl-footer-btn {
 	cursor: pointer; padding: 0.45rem 1rem; border-radius: 7px;
