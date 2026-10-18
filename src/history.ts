@@ -14,7 +14,8 @@ export function calibration(attempts: Attempt[]): Calibration[] {
 	const levels: Confidence[] = ["sure", "unsure", "guess"];
 	return levels
 		.map((level) => {
-			const mine = attempts.filter((a) => a.confidence === level);
+			// A failed marking was never right or wrong, so it says nothing either way.
+			const mine = attempts.filter((a) => a.confidence === level && a.gradedBy !== "error");
 			return { level, answers: mine.length, right: mine.filter((a) => a.verdict === "correct").length };
 		})
 		.filter((c) => c.answers > 0);

@@ -17,10 +17,10 @@ export function keyOf(item: ExamItem): string {
 export function ratingFor(a: Attempt, quick = false): Grade {
 	// By score, not verdict: Hard is a passing grade in FSRS, so a mostly-wrong
 	// "partial" (a select-all answer with one right pick in five) must not count
-	// as remembered.
-	if (a.score < 60) return Rating.Again;
+	// as remembered. A guess is checked before Hard for the same reason: a
+	// partly-right guess must not pass where a fully-right one does not.
+	if (a.score < 60 || a.confidence === "guess") return Rating.Again;
 	if (a.score < 90) return Rating.Hard;
-	if (a.confidence === "guess") return Rating.Again;
 	if (a.confidence === "sure" && quick) return Rating.Easy;
 	return Rating.Good;
 }

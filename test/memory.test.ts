@@ -76,6 +76,12 @@ test("confidence tunes the rating", () => {
 	assert.equal(ratingFor(attempt("a", "q1", 0, ago(0), { confidence: "sure" }), true), Rating.Again);
 });
 
+test("a partly-right guess is a miss too, not a pass", () => {
+	const partial = (confidence: "guess" | "sure") => attempt("a", "q1", 70, ago(0), { verdict: "partial", confidence });
+	assert.equal(ratingFor(partial("guess")), Rating.Again, "no better than a fully-right guess");
+	assert.equal(ratingFor(partial("sure"), true), Rating.Hard, "sure does not lift a partial answer");
+});
+
 test("quick means at or under your usual time, once there is a usual time", () => {
 	const pace = new Pace();
 	const fast = attempt("a", "x", 100, ago(0), { ms: 1000 });

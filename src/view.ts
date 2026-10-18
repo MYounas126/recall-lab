@@ -969,7 +969,7 @@ export class RecallLabView extends ItemView {
 
 		// Mistakes made with confidence get their own list: once corrected they
 		// are remembered unusually well (the hypercorrection effect).
-		const confident = graded.filter((a) => a.confidence === "sure" && a.verdict !== "correct");
+		const confident = graded.filter((a) => counts(a) && a.confidence === "sure" && a.verdict !== "correct");
 		if (confident.length) {
 			const list = main.createDiv({ cls: "rl-panel rl-panel-confident" });
 			list.createEl("h3", { text: "You were sure, but…" });

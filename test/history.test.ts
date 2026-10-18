@@ -60,6 +60,7 @@ test("calibration counts how often each level of confidence was right", () => {
 		attempt("a", "q2", 0, undefined, { confidence: "sure" }),
 		attempt("a", "q3", 100, undefined, { confidence: "guess" }),
 		attempt("a", "q4", 100), // from before confidence was asked
+		attempt("a", "q5", 0, undefined, { confidence: "sure", gradedBy: "error" }), // Claude unreachable
 	]);
 	assert.deepEqual(levels, [
 		{ level: "sure", answers: 2, right: 1 },
