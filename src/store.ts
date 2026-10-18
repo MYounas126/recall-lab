@@ -3,15 +3,15 @@ import {
 	Attempt,
 	Bank,
 	Course,
+	ExamItem,
 	LabProgress,
 	EMPTY_PROGRESS,
 	ProgressFile,
-	Question,
 	SessionSummary,
 	Tier,
 	TIERS,
-	letterGrade,
 } from "./types";
+import { AnswerIndex } from "./history";
 import { SerialQueue, shuffled } from "./util";
 
 /** Reads banks and courses, and persists attempts, sessions and lab progress. */
@@ -194,53 +194,11 @@ export class Store {
 		return found;
 	}
 
-	// ---------- derived stats ----------
+	// ---------- exam composition ----------
 
-	/**
-	 * Mastery of one question: the mean of its three most recent scores, so a
-	 * lucky guess does not erase a history of getting it wrong.
-	 */
-	static questionMastery(attempts: Attempt[], questionId: string): number | null {
-		const mine = attempts.filter((a) => a.questionId === questionId).slice(-3);
-		if (!mine.length) return null;
-		return mine.reduce((s, a) => s + a.score, 0) / mine.length;
-	}
-
-	/**
-	 * Mastery of a tier. Questions never attempted count as zero, so the number
-	 * answers "how much of this tier do I actually own", not "how did I do on
-	 * the handful I tried".
-	 */
-	static tierMastery(bank: Bank, attempts: Attempt[], tier: Tier): number {
-		const qs = bank.questions.filter((q) => q.tier === tier);
-		if (!qs.length) return 100;
-		const total = qs.reduce((sum, q) => sum + (Store.questionMastery(attempts, q.id) ?? 0), 0);
-		return Math.round(total / qs.length);
-	}
-
-	static tierCoverage(bank: Bank, attempts: Attempt[], tier: Tier): { seen: number; total: number } {
-		const qs = bank.questions.filter((q) => q.tier === tier);
-		const seen = qs.filter((q) => Store.questionMastery(attempts, q.id) !== null).length;
-		return { seen, total: qs.length };
-	}
-
-	/** Topics ordered worst first, across a bank. */
-	static weakTopics(bank: Bank, attempts: Attempt[], limit = 5): { topic: string; score: number }[] {
-		const byTopic = new Map<string, number[]>();
-		const ids = new Set(bank.questions.map((q) => q.id));
-		for (const a of attempts) {
-			if (!ids.has(a.questionId)) continue;
-			const list = byTopic.get(a.topic) ?? [];
-			list.push(a.score);
-			byTopic.set(a.topic, list);
-		}
-		return [...byTopic.entries()]
-			.map(([topic, scores]) => ({
-				topic,
-				score: Math.round(scores.reduce((s, n) => s + n, 0) / scores.length),
-			}))
-			.sort((a, b) => a.score - b.score)
-			.slice(0, limit);
+	/** Every question in these banks, each paired with its own bank. */
+	static itemsOf(banks: Bank[]): ExamItem[] {
+		return banks.flatMap((b) => b.questions.map((q) => ({ bankId: b.id, q })));
 	}
 
 	/**
@@ -248,16 +206,13 @@ export class Store {
 	 * longest untouched. Within those groups the order is shuffled so repeat
 	 * sessions do not become a memorised sequence.
 	 */
-	static pickQuestions(bank: Bank, attempts: Attempt[], tier: Tier, count: number, weakOnly = false): Question[] {
-		const lastSeen = new Map<string, number>();
-		for (const a of attempts) lastSeen.set(a.questionId, Date.parse(a.ts));
-
-		let scored = bank.questions
-			.filter((q) => q.tier === tier)
-			.map((q) => ({
-				q,
-				mastery: Store.questionMastery(attempts, q.id),
-				seen: lastSeen.get(q.id) ?? 0,
+	static pickQuestions(items: ExamItem[], index: AnswerIndex, tier: Tier, count: number, weakOnly = false): ExamItem[] {
+		let scored = items
+			.filter((it) => it.q.tier === tier)
+			.map((it) => ({
+				it,
+				mastery: index.mastery(it.bankId, it.q.id),
+				seen: index.lastSeen(it.bankId, it.q.id),
 			}))
 			.filter((e) => (weakOnly ? (e.mastery ?? 0) < 80 : true));
 
@@ -268,7 +223,7 @@ export class Store {
 			if (am !== bm) return am - bm;
 			return a.seen - b.seen;
 		});
-		return scored.slice(0, count).map((e) => e.q);
+		return scored.slice(0, count).map((e) => e.it);
 	}
 
 	// ---------- note completion ----------
@@ -299,15 +254,13 @@ export class Store {
 		return Boolean(data.completed?.[path]);
 	}
 
-	// ---------- exam composition ----------
-
 	/**
 	 * One exam that ramps through all three levels instead of making you pick a
 	 * tier: easy first to warm up, then hard, then brutal. Within each level the
 	 * weakest and least-recently-seen questions come first, so a repeat exam is
-	 * not the same paper.
+	 * not the same paper. The items may span several banks, as a course exam's do.
 	 */
-	static pickExam(bank: Bank, attempts: Attempt[], total: number): Question[] {
+	static pickExam(items: ExamItem[], index: AnswerIndex, total: number): ExamItem[] {
 		const split: Record<Tier, number> = {
 			easy: Math.round(total * 0.45),
 			hard: Math.round(total * 0.35),
@@ -315,11 +268,11 @@ export class Store {
 		};
 		split.brutal = Math.max(0, total - split.easy - split.hard);
 
-		const out: Question[] = [];
+		const out: ExamItem[] = [];
 		for (const tier of TIERS) {
 			const want = split[tier];
 			if (want <= 0) continue;
-			const got = Store.pickQuestions(bank, attempts, tier, want, false);
+			const got = Store.pickQuestions(items, index, tier, want, false);
 			out.push(...got);
 			// A thin tier donates its shortfall to the next one.
 			const short = want - got.length;
@@ -328,10 +281,10 @@ export class Store {
 		return out;
 	}
 
-	/** Every question in the bank, easy first — the "full exam". */
-	static fullExam(bank: Bank): Question[] {
+	/** Every question, easy first — the "full exam". */
+	static fullExam(items: ExamItem[]): ExamItem[] {
 		const rank: Record<string, number> = { easy: 0, hard: 1, brutal: 2 };
-		return bank.questions.slice().sort((a, b) => rank[a.tier] - rank[b.tier]);
+		return items.slice().sort((a, b) => rank[a.q.tier] - rank[b.q.tier]);
 	}
 }
 

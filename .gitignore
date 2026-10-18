@@ -5,6 +5,7 @@ node_modules/
 # ship it as a GitHub release asset rather than committing it.
 /main.js
 *.map
+test/.build/
 
 # Obsidian: per-vault plugin settings, if developed inside a vault
 data.json

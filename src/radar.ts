@@ -1,6 +1,5 @@
 import { Bank, Course, SkillAxis } from "./types";
-import { Attempt } from "./types";
-import { Store } from "./store";
+import { AnswerIndex } from "./history";
 
 export interface AxisScore {
 	axis: SkillAxis;
@@ -28,11 +27,11 @@ export function axisFor(course: Course, topic: string, explicit?: string): strin
 export function scoreCourses(
 	courses: Course[],
 	banksFor: (c: Course) => Bank[],
-	attempts: Attempt[]
+	index: AnswerIndex
 ): AxisScore[] {
 	return courses.map((course) => {
 		const banks = banksFor(course);
-		const inner = scoreAxes(course, banks, attempts);
+		const inner = scoreAxes(course, banks, index);
 		const withQuestions = inner.filter((a) => a.total > 0);
 		const score = withQuestions.length
 			? Math.round(withQuestions.reduce((s, a) => s + a.score, 0) / withQuestions.length)
@@ -62,21 +61,18 @@ export function untested(scores: AxisScore[]): AxisScore[] {
 	return scores.filter((s) => s.total > 0 && s.seen === 0);
 }
 
-export function scoreAxes(course: Course, banks: Bank[], attempts: Attempt[]): AxisScore[] {
-	const mine = banks.map((b) => b.id);
-	const relevant = attempts.filter((a) => mine.includes(a.bankId));
+export function scoreAxes(course: Course, banks: Bank[], index: AnswerIndex): AxisScore[] {
+	const items = banks.flatMap((b) => b.questions.map((q) => ({ bankId: b.id, q })));
 
 	return course.axes.map((axis) => {
-		const qs = banks
-			.flatMap((b) => b.questions)
-			.filter((q) => axisFor(course, q.topic, q.axis) === axis.id);
+		const qs = items.filter((it) => axisFor(course, it.q.topic, it.q.axis) === axis.id);
 
 		if (!qs.length) return { axis, score: 0, total: 0, seen: 0 };
 
 		let sum = 0;
 		let seen = 0;
-		for (const q of qs) {
-			const m = Store.questionMastery(relevant, q.id);
+		for (const it of qs) {
+			const m = index.mastery(it.bankId, it.q.id);
 			if (m !== null) {
 				seen += 1;
 				sum += m;
