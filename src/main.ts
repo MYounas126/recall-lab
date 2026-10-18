@@ -3,10 +3,10 @@ import { DEFAULT_SETTINGS, RecallLabSettingTab, RecallLabSettings } from "./sett
 import { Store } from "./store";
 import { ClaudeCli } from "./claude";
 import { Tasks } from "./tasks";
-import { LabStore } from "./labs";
+import { LabStore, hintsNeedShortening } from "./labs";
 import { Log } from "./log";
 import { ConfirmModal, RecallLabView, VIEW_TYPE_RECALL } from "./view";
-import { Bank, Course, Question } from "./types";
+import { Bank, Course, Lab, Question } from "./types";
 import { needingVariants } from "./variants";
 import { needingSteps } from "./guided";
 import { Leech } from "./leeches";
@@ -152,6 +152,7 @@ export default class RecallLabPlugin extends Plugin {
 		this.addCommand({ id: "remove-leftovers", name: "Remove leftover quizzes, labs and courses", callback: () => void this.removeLeftovers() });
 		this.addCommand({ id: "write-variants", name: "Write variants for mature questions", callback: () => void this.offerVariants() });
 		this.addCommand({ id: "write-steps", name: "Write guided steps for brutal problems", callback: () => void this.offerSteps() });
+		this.addCommand({ id: "shorten-lab-hints", name: "Shorten lab hints to CTF-style nudges", callback: () => void this.offerHintRewrite() });
 
 		// The "Complete" footer at the bottom of every note inside a course folder.
 		this.registerEvent(this.app.workspace.on("file-open", () => this.queueFooters()));
@@ -702,6 +703,47 @@ export default class RecallLabPlugin extends Plugin {
 			"Write steps",
 			() => void this.buildExtras("steps", needing)
 		).open();
+	}
+
+	/**
+	 * Offers to rewrite the hints of labs written before hints were nudges:
+	 * theirs walk through the solution, the last one all but giving it away.
+	 */
+	async offerHintRewrite(): Promise<void> {
+		const labs = (await this.labs.list()).filter(hintsNeedShortening);
+		if (!labs.length) {
+			new Notice("Every lab's hints are already short nudges.");
+			return;
+		}
+		new ConfirmModal(
+			this.app,
+			`Shorten the hints of ${labs.length} lab${labs.length === 1 ? "" : "s"}?`,
+			"Claude rewrites them as CTF-style nudges of a few words, all in one request. Hints you have already " +
+				"revealed stay revealed, and nothing else in your progress changes. This uses your Claude plan.",
+			"Shorten hints",
+			() => void this.rewriteHints(labs)
+		).open();
+	}
+
+	private async rewriteHints(labs: Lab[]): Promise<void> {
+		const res = await this.build("lab-hints", "shorter lab hints", async () => {
+			this.log.info("shortening lab hints", { labs: labs.length });
+			const notice = new Notice(`Shortening the hints of ${labs.length} lab${labs.length === 1 ? "" : "s"}…`, 0);
+			try {
+				return await this.tasks.rewriteHints(labs);
+			} finally {
+				notice.hide();
+			}
+		});
+		if (res === null) return;
+		if (typeof res !== "number") {
+			this.log.error("shortening lab hints failed", { error: res.error });
+			new Notice(`Could not shorten the hints: ${res.error}`, 12000);
+			return;
+		}
+		this.log.info("lab hints shortened", { labs: res });
+		new Notice(`Shortened the hints of ${res} lab${res === 1 ? "" : "s"}.`, 8000);
+		await this.refreshView();
 	}
 
 	/**

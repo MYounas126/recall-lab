@@ -5,7 +5,7 @@ import { Attempt, Bank, BlurtResult, Course, Diagnosis, Lab, Question, QuestionT
 import type { Leech } from "./leeches";
 import { Section, blurtPrompt, headingsOf, parseBlurt, sectionsOf } from "./blurt";
 import { parseStudent, parseTeachScore, studentPrompt, teachScorePrompt } from "./teach";
-import { hashFlag, validateLab, detectToolchain, describeToolchain } from "./labs";
+import { hashFlag, nudges, validateLab, detectToolchain, describeToolchain } from "./labs";
 import type { Strictness } from "./settings";
 import { hashText } from "./util";
 import { answeredTo, plain } from "./answers";
@@ -196,7 +196,9 @@ export class Tasks {
 				text.split(r.flag).join(`\`${lab.flagFormat}\``).split(bareFlag(r.flag)).join("…");
 			lab.brief = redact(lab.brief);
 			lab.solution = redact(lab.solution);
-			lab.hints = lab.hints.map(redact);
+			// Hints are nudges of a few words; one that walks through a step or
+			// quotes a value is dropped rather than handed over.
+			lab.hints = nudges(lab.hints.map(redact));
 
 			const readable = [lab.brief, lab.solution, lab.setup, ...lab.hints, lab.title].join("\n");
 			if (readable.includes(r.flag) || readable.includes(bareFlag(r.flag))) {
@@ -308,6 +310,39 @@ export class Tasks {
 		if (!res.ok) return { error: res.error };
 		const diagnosis = parseDiagnosis(leech.item.q, res.data, new Date());
 		return typeof diagnosis === "string" ? { error: `Claude's diagnosis was not usable: ${diagnosis}.` } : diagnosis;
+	}
+
+	// ------------------------------------------------------------- lab hints
+
+	/**
+	 * Rewrites labs' hints as CTF nudges, in one request, and saves them into
+	 * each lab's file. Only nudges are kept; a lab that gets none keeps its
+	 * old hints. Progress is untouched. Returns how many labs were rewritten.
+	 */
+	async rewriteHints(labs: Lab[]): Promise<number | { error: string }> {
+		if (!labs.length) return 0;
+		const res = await this.cli.askJson<{ hints?: Record<string, unknown> }>(hintsPrompt(labs), 240000);
+		if (!res.ok) return { error: res.error };
+		let done = 0;
+		for (const lab of labs) {
+			const hints = nudges(res.data?.hints?.[lab.id]);
+			if (!hints.length) continue;
+			const path = normalizePath(`${this.labsFolder()}/${lab.id}.json`);
+			const file = this.app.vault.getAbstractFileByPath(path);
+			if (!(file instanceof TFile)) continue;
+			// Read again just before the write, so nothing else in the file is lost.
+			let fresh: Lab;
+			try {
+				fresh = JSON.parse(await this.app.vault.read(file)) as Lab;
+			} catch {
+				continue;
+			}
+			fresh.hints = hints;
+			await this.writeFile(path, JSON.stringify(fresh, null, 2) + "\n");
+			done += 1;
+		}
+		if (!done) return { error: "None of the hints Claude wrote were short enough to use." };
+		return done;
 	}
 
 	// --------------------------------------------------------------- variants
@@ -595,7 +630,7 @@ export function labPrompt(
 		"  way to check their answer, compare against a hash or an encoded form, never against the flag.",
 		"- `setup` is the shell commands to get going (compile, run). Keep it to a few lines. It is shown to",
 		"  the learner to read before they run it, so keep it obvious and harmless.",
-		"- 2 to 4 `hints`, each giving away a little more, the last one nearly telling them.",
+		...HINT_RULES,
 		"- `solution` explains how it was meant to be solved, for after they finish.",
 		"",
 		"SHAPE",
@@ -604,7 +639,8 @@ export function labPrompt(
 		'  "brief":"<markdown: the task, and what done looks like>",',
 		'  "setup":"gcc -g -O0 -o target src/target.c\n./target",',
 		'  "files":[{"path":"src/target.c","content":"<full file>","executable":false}],',
-		'  "hints":["...","..."],"flag":"flag{...}","flagFormat":"flag{...}",',
+		'  "hints":["Mind the register width.","What does AH cover?","Not every write zero-extends."],',
+		'  "flag":"flag{...}","flagFormat":"flag{...}",',
 		'  "solution":"<markdown walkthrough>"}]}',
 		"",
 		`Use axis ids from: ${course.axes.map((a) => a.id).join(", ")}`,
@@ -614,6 +650,43 @@ export function labPrompt(
 		"---",
 		content,
 		"---",
+	].join("\n");
+}
+
+/** How lab hints are written: CTF nudges, the way HackTheBox words them. */
+const HINT_RULES = [
+	"- Exactly 3 `hints`, written the way HackTheBox or a CTF writes them: each AT MOST 8 words, a nudge",
+	"  toward where to look or which idea matters, e.g. \"Mind the register width.\", \"What does AH",
+	"  cover?\", \"Not every write zero-extends.\" Each may point a little closer than the last, but even",
+	"  the third leaves all the work to the learner.",
+	"- A hint is never a step to follow, a command to run, a calculation, a value, a key, an offset or",
+	"  the flag. No numbers beyond a few digits.",
+];
+
+/** The prompt that rewrites labs' walkthrough hints as nudges. Pure, so it can be tested. */
+export function hintsPrompt(labs: Lab[]): string {
+	return [
+		"Rewrite the hints of each hands-on lab below. Reply with ONLY a JSON object, no prose and no fence.",
+		"",
+		"Each lab is a CTF-style challenge: one source file, and a flag the learner works out by reading it.",
+		"Its current hints walk through the solution; replace them with real CTF hints.",
+		"",
+		"RULES",
+		...HINT_RULES,
+		"- Use the lab's id exactly as given.",
+		"",
+		'SHAPE: {"hints":{"<lab id>":["...","...","..."]}}',
+		"",
+		"LABS:",
+		JSON.stringify(
+			labs.map((l) => ({
+				id: l.id, title: l.title, tier: l.tier, brief: l.brief,
+				files: l.files.map((f) => ({ path: f.path, content: f.content })),
+				solution: l.solution,
+			})),
+			null,
+			1
+		),
 	].join("\n");
 }
 

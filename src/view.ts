@@ -23,7 +23,7 @@ import { findLeeches } from "./leeches";
 import { needingSteps, needsGuidance } from "./guided";
 import { SECOND_TRY_CAP, combineTries } from "./tasks";
 import { blurtExam, missedHeading } from "./blurt";
-import { checkFlag } from "./labs";
+import { checkFlag, hintsNeedShortening } from "./labs";
 import { INSTALL_HINT } from "./claude";
 
 // Rough per-quiz figures for the bulk-generation dialog. Illustrative only:
@@ -2328,6 +2328,13 @@ export class RecallLabView extends ItemView {
 			const hintPanel = main.createDiv({ cls: "rl-panel" });
 			hintPanel.createEl("h3", { text: "Hints" });
 			hintPanel.createDiv({ cls: "rl-muted", text: "Each hint costs 15% of the lab's score." });
+			// Labs written before hints were nudges walk through the solution.
+			if (hintsNeedShortening(lab) && !prog.solvedAt) {
+				const old = hintPanel.createDiv({ cls: "rl-muted" });
+				old.appendText("These hints were written as full steps, not CTF-style nudges. ");
+				const fix = old.createEl("a", { cls: "rl-link", text: "Shorten them (uses Claude)" });
+				fix.onclick = (e) => { e.preventDefault(); void this.plugin.offerHintRewrite(); };
+			}
 			for (let i = 0; i < Math.min(prog.hintsUsed, lab.hints.length); i++) {
 				const h = hintPanel.createDiv({ cls: "rl-hint-shown" });
 				h.createSpan({ cls: "rl-chip", text: `Hint ${i + 1}` });
