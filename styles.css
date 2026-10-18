@@ -273,6 +273,20 @@
 	stroke-linejoin: round;
 }
 .rl-radar-dot { fill: var(--interactive-accent); }
+.rl-radar-ghost {
+	fill: none;
+	stroke: var(--text-muted);
+	stroke-width: 1.5;
+	stroke-dasharray: 5 4;
+	stroke-linejoin: round;
+}
+.rl-radar-caption {
+	text-align: center;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	margin: -0.3rem auto 0.6rem;
+	max-width: 42rem;
+}
 .rl-radar-label {
 	fill: var(--text-normal);
 	font-size: 12px;

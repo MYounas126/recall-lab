@@ -38,7 +38,8 @@ test("across banks, an unanswered q1 is still asked first", () => {
 });
 
 test("the radar does not borrow scores from another bank's q1", () => {
-	const [axis] = scoreAxes(course, [bankA, bankB], new AnswerIndex([attempt("a", "q1", 100)]));
+	const index = new AnswerIndex([attempt("a", "q1", 100)]);
+	const [axis] = scoreAxes(course, [bankA, bankB], (b, q) => index.mastery(b, q));
 	assert.equal(axis.total, 4);
 	assert.equal(axis.seen, 1);
 	assert.equal(axis.score, 25); // 100 over four questions; the unanswered three count as zero
