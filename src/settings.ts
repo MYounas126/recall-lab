@@ -32,6 +32,8 @@ export interface RecallLabSettings {
 	recallFirst: boolean;
 	/** Turn ==highlighted== text in course notes into fill-in-the-blank questions. */
 	highlightClozes: boolean;
+	/** Misses after which a question goes to the leech clinic. */
+	leechThreshold: number;
 }
 
 export const DEFAULT_SETTINGS: RecallLabSettings = {
@@ -52,6 +54,7 @@ export const DEFAULT_SETTINGS: RecallLabSettings = {
 	memoryMap: true,
 	recallFirst: false,
 	highlightClozes: true,
+	leechThreshold: 4,
 };
 
 export class RecallLabSettingTab extends PluginSettingTab {
@@ -165,6 +168,23 @@ export class RecallLabSettingTab extends PluginSettingTab {
 					this.plugin.settings.highlightClozes = v;
 					await this.plugin.saveSettings();
 				})
+			);
+
+		new Setting(containerEl)
+			.setName("Leech clinic after")
+			.setDesc(
+				"How many times a question has to be missed, and not since got right twice running, before the " +
+					"overview offers to diagnose it."
+			)
+			.addSlider((s) =>
+				s
+					.setLimits(2, 10, 1)
+					.setValue(this.plugin.settings.leechThreshold)
+					.setDynamicTooltip()
+					.onChange(async (v) => {
+						this.plugin.settings.leechThreshold = v;
+						await this.plugin.saveSettings();
+					})
 			);
 
 		new Setting(containerEl).setName("Daily review").setHeading();

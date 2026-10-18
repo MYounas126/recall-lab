@@ -4,16 +4,20 @@ import { Store } from "./store";
 import { clozeBlanks, clozePieces, gradeLocally, sameValue } from "./grader";
 import { shuffled } from "./util";
 import { QuestionScore, renderRadar, scoreAxes, scoreCourses, weakestTested, untested, withBefore, AxisScore } from "./radar";
-import { Attempt, Bank, Confidence, Course, ExamItem, Lab, LabProgress, ProgressFile, Question, SessionSummary, Tier, idOf, labScore, letterGrade } from "./types";
+import {
+	Attempt, Bank, Confidence, Course, ExamItem, Lab, LabProgress, ProgressFile, Question, SessionSummary, Tier,
+	idOf, labScore, letterGrade, qkey,
+} from "./types";
 import { AnswerIndex, calibration } from "./history";
 import {
-	DayRecord, Memory, ReviewPlan, counts, describeWhen, endOfDay, expectedScore, keysOf, planReview, settledRecord, startOfDay,
-	streakOf,
+	DayRecord, Memory, ReviewPlan, counts, describeAgo, describeWhen, endOfDay, expectedScore, keysOf, planReview, settledRecord,
+	startOfDay, streakOf,
 } from "./memory";
 import { keyAction } from "./keys";
 import { RecallStage, optionsHidden, recallApplies } from "./recall";
 import { AnswerState, blankSize, describeResponse, notReady, plain, scrambled } from "./answers";
 import { needingVariants, withVariants } from "./variants";
+import { findLeeches } from "./leeches";
 import { checkFlag } from "./labs";
 import { INSTALL_HINT } from "./claude";
 
@@ -25,7 +29,7 @@ const USD_PER_QUIZ = 0.13;
 
 export const VIEW_TYPE_RECALL = "recall-lab-view";
 
-type Screen = "home" | "folder" | "exam" | "results" | "history" | "lab";
+type Screen = "home" | "folder" | "exam" | "results" | "history" | "lab" | "clinic";
 
 
 interface LiveAnswer {
@@ -60,6 +64,8 @@ export class RecallLabView extends ItemView {
 	private sessionKind: "exam" | "review" = "exam";
 	/** Sessions whose on-demand feedback has been asked for and not yet landed. */
 	private coachingInFlight = new Set<string>();
+	/** The leech clinic's question on screen, by key. */
+	private clinicKey: string | null = null;
 	/** Recall-first state for the question on screen. */
 	private recallStage: RecallStage | null = null;
 	/** What the keyboard can do to the question on screen. */
@@ -229,6 +235,7 @@ export class RecallLabView extends ItemView {
 		if (this.screen === "lab" && this.openLab) await this.renderLab(main, this.openLab);
 		else if (this.screen === "results") await this.renderResults(main);
 		else if (this.screen === "history") await this.renderHistory(main);
+		else if (this.screen === "clinic" && this.clinicKey) await this.renderClinic(main, this.clinicKey);
 		else if (this.screen === "folder" && this.selectedFolder) await this.renderFolder(main, this.selectedFolder);
 		else await this.renderHome(main);
 	}
@@ -286,6 +293,7 @@ export class RecallLabView extends ItemView {
 		}
 
 		await this.renderReviewPanel(main, this.everyBank);
+		this.renderClinicPanel(main, progress);
 
 		// The central radar: one spoke per course, across the whole vault.
 		const expected = this.expectedScores(progress.attempts);
@@ -410,6 +418,106 @@ export class RecallLabView extends ItemView {
 		if (week) {
 			panel.createDiv({ cls: "rl-muted", text: `Coming up: ${ahead[1]} tomorrow, ${week} over the next 7 days.` });
 		}
+	}
+
+	/** Opens the leech clinic on one question. */
+	async openClinic(key: string): Promise<void> {
+		await this.refresh();
+		this.clinicKey = key;
+		this.screen = "clinic";
+		await this.render();
+	}
+
+	/** The note a bank drills, highlight banks included. */
+	private noteOfBank(bankId: string): string | undefined {
+		return this.everyBank.find((b) => b.id === bankId)?.note;
+	}
+
+	/**
+	 * Questions you keep missing, with a way to find out why. Diagnosing uses
+	 * Claude, so each is a button that says so.
+	 */
+	private renderClinicPanel(main: HTMLElement, progress: ProgressFile): void {
+		const leeches = findLeeches(this.everyBank, new AnswerIndex(progress.attempts), this.plugin.settings.leechThreshold);
+		if (!leeches.length) return;
+		const panel = main.createDiv({ cls: "rl-panel" });
+		const head = panel.createDiv({ cls: "rl-panel-head" });
+		head.createEl("h3", { text: "Leech clinic" });
+		head.createSpan({ cls: "rl-grade-pill", text: String(leeches.length) });
+		panel.createDiv({
+			cls: "rl-muted",
+			text: "Questions you keep missing are usually a misunderstanding, not forgetting, and more reviews will " +
+				"not fix them. Claude can read your wrong answers and name it.",
+		});
+		for (const leech of leeches.slice(0, 5)) {
+			const row = panel.createDiv({ cls: "rl-review-row" });
+			row.createSpan({ cls: "rl-chip", text: `missed ${leech.misses}×` });
+			void this.md(leech.item.q.prompt.split("\n")[0], row.createDiv({ cls: "rl-review-q" }));
+			const actions = row.createDiv({ cls: "rl-actions" });
+			if (progress.clinic?.[leech.key]) {
+				new ButtonComponent(actions).setButtonText("Open diagnosis").setCta()
+					.onClick(() => void this.openClinic(leech.key));
+			} else {
+				new ButtonComponent(actions).setButtonText("Diagnose (uses Claude)")
+					.onClick(() => void this.plugin.diagnoseLeech(leech, this.noteOfBank(leech.item.bankId)));
+			}
+		}
+		if (leeches.length > 5) panel.createDiv({ cls: "rl-muted", text: `And ${leeches.length - 5} more.` });
+	}
+
+	/** One leech: the question, what is going wrong, a three-step fix, and a fresh question to try. */
+	private async renderClinic(main: HTMLElement, key: string): Promise<void> {
+		const progress = await this.plugin.store.readProgress();
+		const diagnosis = progress.clinic?.[key];
+		const item = Store.itemsOf(this.everyBank).find((it) => qkey(it.bankId, it.q.id) === key);
+
+		const head = main.createDiv({ cls: "rl-head" });
+		const back = head.createEl("a", { cls: "rl-link", text: "← back" });
+		back.onclick = (e) => { e.preventDefault(); this.screen = "home"; this.clinicKey = null; void this.render(); };
+		head.createEl("h2", { text: "Leech clinic" });
+		if (!item || !diagnosis) {
+			main.createDiv({ cls: "rl-empty", text: "That question, or its diagnosis, is no longer here." });
+			return;
+		}
+
+		const q = item.q;
+		const wrong = new AnswerIndex(progress.attempts).attempts(item.bankId, q.id).filter((a) => a.verdict === "incorrect");
+		const question = main.createDiv({ cls: "rl-panel" });
+		question.createEl("h3", { text: `The question you have missed ${wrong.length} times` });
+		await this.md(q.prompt, question.createDiv());
+		if (q.code) question.createEl("pre", { cls: "rl-code" }).createEl("code", { text: q.code });
+		if (wrong.length) {
+			const recent = question.createDiv({ cls: "rl-model" });
+			recent.createDiv({ cls: "rl-model-label", text: "Your most recent wrong answers" });
+			const ul = recent.createEl("ul");
+			for (const a of wrong.slice(-3)) ul.createEl("li", { text: a.response || "(blank)" });
+		}
+
+		const what = main.createDiv({ cls: "rl-panel rl-panel-confident" });
+		what.createEl("h3", { text: "What is going wrong" });
+		await this.md(diagnosis.misconception, what.createDiv());
+
+		const lesson = main.createDiv({ cls: "rl-panel" });
+		lesson.createEl("h3", { text: `Put it right in ${diagnosis.lesson.length} steps` });
+		const ol = lesson.createEl("ol", { cls: "rl-lesson" });
+		for (const step of diagnosis.lesson) await this.md(step, ol.createEl("li"));
+
+		const actions = main.createDiv({ cls: "rl-actions" });
+		new ButtonComponent(actions).setButtonText("Try a fresh question").setCta().onClick(() =>
+			void this.launch(
+				{ id: `clinic:${key}`, title: "Leech clinic", questions: [] },
+				[{ bankId: item.bankId, q: diagnosis.question, of: q.id }],
+				"review"
+			)
+		);
+		new ButtonComponent(actions).setButtonText("Diagnose again (uses Claude)").onClick(() =>
+			void this.plugin.diagnoseLeech({ item, key, misses: wrong.length, wrong: wrong.slice(-6) }, this.noteOfBank(item.bankId))
+		);
+		main.createDiv({
+			cls: "rl-muted",
+			text: `Diagnosed ${describeAgo(new Date(diagnosis.at), new Date())}. Your answer to the fresh question counts ` +
+				"toward the original's review schedule.",
+		});
 	}
 
 	/**

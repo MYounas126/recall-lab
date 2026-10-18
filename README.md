@@ -88,6 +88,14 @@ the same idea dressed differently. It asks first, since it uses your plan.
 Reviews then ask a variant in place of a mature question, rotating through
 them, and the answer still counts toward the original's schedule.
 
+**Leech clinic.** A question you have missed four times or more, and not
+since got right twice running, is a misunderstanding rather than forgetting,
+and more reviews will not fix it. The overview lists these; *Diagnose (uses
+Claude)* has Claude read your wrong answers, name the misconception, and write
+a short step-by-step lesson plus a fresh question on the same idea. Your
+answer to it counts toward the original's schedule. The threshold is under
+Settings → Questions.
+
 **Memory map.** In reading view, each heading that questions point at gets a
 dot: green when you would expect to score 80% or more on its questions right
 now, amber from 50%, red below, grey when none has been answered. Hover it for

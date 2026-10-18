@@ -1,7 +1,8 @@
 import { App, Notice, TFile, normalizePath } from "obsidian";
 import { ClaudeCli } from "./claude";
 import { Store } from "./store";
-import { Bank, Course, Lab, Question, QuestionType, Verdict } from "./types";
+import { Attempt, Bank, Course, Diagnosis, Lab, Question, QuestionType, Verdict } from "./types";
+import type { Leech } from "./leeches";
 import { hashFlag, validateLab, detectToolchain, describeToolchain } from "./labs";
 import type { Strictness } from "./settings";
 import { hashText } from "./util";
@@ -208,6 +209,19 @@ export class Tasks {
 			);
 		}
 		return out;
+	}
+
+	// ---------------------------------------------------------------- clinic
+
+	/** Asks Claude why you keep missing a question, for a lesson and a fresh question. */
+	async diagnoseLeech(leech: Leech, notePath: string | undefined): Promise<Diagnosis | { error: string }> {
+		const note = notePath ? this.app.vault.getAbstractFileByPath(notePath) : null;
+		const content = note instanceof TFile ? await this.app.vault.cachedRead(note) : "";
+		const title = note instanceof TFile ? note.basename : "(no note)";
+		const res = await this.cli.askJson<unknown>(leechPrompt(leech.item.q, leech.wrong, title, content), 240000);
+		if (!res.ok) return { error: res.error };
+		const diagnosis = parseDiagnosis(leech.item.q, res.data, new Date());
+		return typeof diagnosis === "string" ? { error: `Claude's diagnosis was not usable: ${diagnosis}.` } : diagnosis;
 	}
 
 	// --------------------------------------------------------------- variants
@@ -465,6 +479,55 @@ export function labPrompt(
 		content,
 		"---",
 	].join("\n");
+}
+
+/** The prompt that asks Claude to diagnose a leech. Pure, so it can be tested. */
+export function leechPrompt(q: Question, wrong: Attempt[], noteTitle: string, noteContent: string): string {
+	const { variants: _v, ...question } = q;
+	return [
+		"A learner keeps getting the question below wrong. Diagnose why. Reply with ONLY a JSON object, no prose",
+		"and no code fence.",
+		"",
+		"Read their wrong answers together and find the ONE misunderstanding they share: a rule they have",
+		"backwards, two ideas they conflate, a step they skip. Name it plainly, addressed to them as \"you\".",
+		"Then teach it in exactly three short steps, each building on the last: what the rule really is, why",
+		"it holds, and how to apply it to a case like this one. Use the note's own facts and terms.",
+		"",
+		"Finally, write ONE fresh question on the same idea, of the same type and with every field that type",
+		"needs, that someone with the misunderstanding would get wrong and someone without it would get right.",
+		"",
+		'SHAPE: {"misconception":"<one or two sentences>","lesson":["<step 1>","<step 2>","<step 3>"],',
+		' "question":{"type":"' + q.type + '","prompt":"...", ...every field the type needs..., "explain":"..."}}',
+		"",
+		"THE QUESTION:",
+		JSON.stringify(question, null, 1),
+		"",
+		"THEIR WRONG ANSWERS, OLDEST FIRST:",
+		...wrong.map((a, i) => `${i + 1}. They said: ${a.response || "(blank)"}${a.feedback ? ` | Marked: ${a.feedback}` : ""}`),
+		"",
+		`NOTE TITLE: ${noteTitle}`,
+		"NOTE CONTENT:",
+		"---",
+		noteContent,
+		"---",
+	].join("\n");
+}
+
+/**
+ * Turns Claude's reply into a diagnosis, checking the fresh question the
+ * same way a variant is checked. Returns what is wrong as a string.
+ */
+export function parseDiagnosis(original: Question, data: unknown, now: Date): Diagnosis | string {
+	const d = (data ?? {}) as { misconception?: unknown; lesson?: unknown; question?: unknown };
+	const misconception = typeof d.misconception === "string" ? d.misconception.trim() : "";
+	if (!misconception) return "it named no misconception";
+	const lesson = Array.isArray(d.lesson) ? d.lesson.map(String).map((s) => s.trim()).filter(Boolean).slice(0, 5) : [];
+	if (!lesson.length) return "it gave no lesson";
+	const question = d.question as Question;
+	const problem = checkVariant(original, question);
+	if (problem) return `its fresh question ${problem}`;
+	question.id = `${original.id}~fix`;
+	return { at: now.toISOString(), misconception, lesson, question };
 }
 
 /** The prompt that asks for variants of some questions. Pure, so it can be tested. */
