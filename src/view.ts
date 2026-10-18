@@ -1,12 +1,13 @@
-import { App, ButtonComponent, Component, ItemView, MarkdownRenderer, Modal, Notice, WorkspaceLeaf, setIcon } from "obsidian";
+import { App, ButtonComponent, Component, ItemView, MarkdownRenderer, Modal, Notice, Platform, WorkspaceLeaf, setIcon } from "obsidian";
 import type RecallLabPlugin from "./main";
 import { Store } from "./store";
 import { gradeLocally } from "./grader";
 import { shuffled } from "./util";
 import { renderRadar, scoreAxes, scoreCourses, weakestTested, untested, AxisScore } from "./radar";
-import { Attempt, Bank, Confidence, Course, ExamItem, Lab, LabProgress, Question, SessionSummary, Tier, labScore, letterGrade } from "./types";
+import { Attempt, Bank, Confidence, Course, ExamItem, Lab, LabProgress, ProgressFile, Question, SessionSummary, Tier, labScore, letterGrade } from "./types";
 import { AnswerIndex, calibration } from "./history";
-import { Memory, ReviewPlan, counts, describeWhen, endOfDay, keysOf, planReview } from "./memory";
+import { DayRecord, Memory, ReviewPlan, counts, describeWhen, endOfDay, keysOf, planReview, settledRecord, startOfDay, streakOf } from "./memory";
+import { keyAction } from "./keys";
 import { checkFlag } from "./labs";
 import { INSTALL_HINT } from "./claude";
 
@@ -57,6 +58,14 @@ export class RecallLabView extends ItemView {
 	private sessionKind: "exam" | "review" = "exam";
 	/** Sessions whose on-demand feedback has been asked for and not yet landed. */
 	private coachingInFlight = new Set<string>();
+	/** What the keyboard can do to the question on screen. */
+	private examKeys: {
+		choose(slot: number): void;
+		submit(confidence: Confidence): void;
+		skip?(): void;
+		next?(): void;
+		focus(): void;
+	} | null = null;
 	private index = 0;
 	private answers: LiveAnswer[] = [];
 	private sessionId = "";
@@ -73,7 +82,43 @@ export class RecallLabView extends ItemView {
 	getIcon(): string { return "graduation-cap"; }
 
 	async onOpen(): Promise<void> {
+		// Focusable, so a click on plain text in the view keeps focus here and
+		// the exam's shortcuts keep working; otherwise focus falls to <body>.
+		this.contentEl.tabIndex = -1;
+		this.registerDomEvent(this.containerEl, "keydown", (e) => this.onKey(e));
 		await this.render();
+	}
+
+	/** Keyboard shortcuts on the exam screen; see keyAction for the map. */
+	private onKey(e: KeyboardEvent): void {
+		const keys = this.examKeys;
+		if (this.screen !== "exam" || !keys) return;
+		// Tag names, not instanceof: a popout window has its own element
+		// classes, so instanceof HTMLTextAreaElement is false for a text box
+		// there, and typing "s" would submit the answer.
+		const target = e.target as HTMLElement | null;
+		const tag = target?.tagName ?? "";
+		const typing = tag === "TEXTAREA" || target?.isContentEditable === true ||
+			(tag === "INPUT" && !["radio", "checkbox", "button", "file"].includes((target as HTMLInputElement).type));
+		const action = keyAction({
+			key: e.key,
+			mod: Platform.isMacOS ? e.metaKey : e.ctrlKey,
+			otherMod: Platform.isMacOS ? e.ctrlKey : e.metaKey,
+			alt: e.altKey,
+			typing,
+			onButton: tag === "BUTTON",
+			answered: this.revealed,
+		});
+		if (!action) return;
+		e.preventDefault();
+		if (action.do === "choose") keys.choose(action.slot);
+		else if (action.do === "submit") keys.submit(action.confidence);
+		else if (action.do === "skip") keys.skip?.();
+		else if (action.do === "next") keys.next?.();
+		else {
+			target?.blur?.();
+			keys.focus();
+		}
 	}
 
 	/**
@@ -153,6 +198,7 @@ export class RecallLabView extends ItemView {
 		root.addClass("recall-lab");
 
 		if (this.screen === "exam") { await this.renderExam(root); return; }
+		this.examKeys = null;
 
 		const shell = root.createDiv({ cls: "rl-shell" });
 		const side = shell.createDiv({ cls: "rl-side" });
@@ -261,7 +307,7 @@ export class RecallLabView extends ItemView {
 	}
 
 	/** Today's review over these banks, with every question's memory state. */
-	private async planFor(banks: Bank[]): Promise<{ plan: ReviewPlan; memory: Memory; keys: Set<string> }> {
+	private async planFor(banks: Bank[]): Promise<{ plan: ReviewPlan; memory: Memory; keys: Set<string>; progress: ProgressFile }> {
 		const progress = await this.plugin.store.readProgress();
 		const memory = new Memory(progress.attempts, this.plugin.settings.targetRecall / 100);
 		const noteOf = new Map(this.banks.map((b) => [b.id, b.note]));
@@ -274,16 +320,20 @@ export class RecallLabView extends ItemView {
 			completed: progress.completed ?? {},
 			noteOf: (id) => noteOf.get(id),
 		});
-		return { plan, memory, keys: keysOf(items) };
+		return { plan, memory, keys: keysOf(items), progress };
 	}
 
 	/** What is due today, and the button that starts the review. */
 	private async renderReviewPanel(main: HTMLElement, banks: Bank[], course?: Course): Promise<void> {
-		const { plan, memory, keys } = await this.planFor(banks);
+		const { plan, memory, keys, progress } = await this.planFor(banks);
 		const now = new Date();
 		const panel = main.createDiv({ cls: "rl-panel rl-review-panel" });
 		const head = panel.createDiv({ cls: "rl-panel-head" });
 		head.createEl("h3", { text: course ? "Review this course" : "Today's review" });
+
+		// The streak is vault-wide, so only the overview shows it.
+		const streak = course ? null : streakOf(await this.dayRecord(progress, now));
+		if (streak?.current) head.createSpan({ cls: "rl-streak", text: `🔥 ${streak.current}-day streak` });
 
 		const total = plan.due.length + plan.fresh.length;
 		if (total) {
@@ -292,6 +342,14 @@ export class RecallLabView extends ItemView {
 				cls: "rl-muted",
 				text: "Questions you are closest to forgetting come first, then new ones. Stop whenever you like: every answer is saved as you go.",
 			});
+			if (streak && !streak.today && plan.due.length) {
+				panel.createDiv({
+					cls: "rl-muted",
+					text: streak.current
+						? `Clear today's ${plan.due.length} due to make it ${streak.current + 1} days.`
+						: `Clear today's ${plan.due.length} due to start a streak.`,
+				});
+			}
 			new ButtonComponent(panel.createDiv({ cls: "rl-actions" }))
 				.setButtonText(`Start review (${total})`)
 				.setCta()
@@ -628,6 +686,7 @@ export class RecallLabView extends ItemView {
 	}
 
 	private async renderExam(root: HTMLElement): Promise<void> {
+		this.examKeys = null;
 		const item = this.examItems[this.index];
 		if (!item || !this.bank) { this.screen = "home"; await this.render(); return; }
 		const q = item.q;
@@ -651,7 +710,7 @@ export class RecallLabView extends ItemView {
 		if (q.code) card.createEl("pre", { cls: "rl-code" }).createEl("code", { text: q.code });
 
 		const state: AnswerState = { chosen: [], text: "" };
-		this.renderAnswerWidget(q, card.createDiv({ cls: "rl-answer" }), state);
+		const options = this.renderAnswerWidget(q, card.createDiv({ cls: "rl-answer" }), state);
 
 		// Saying how sure you are tunes the schedule: a lucky guess comes back
 		// soon, a quick sure answer goes further out. Submit claims neither.
@@ -664,29 +723,49 @@ export class RecallLabView extends ItemView {
 		new ButtonComponent(actions).setButtonText("Sure")
 			.setTooltip("Right, sure and quick: it is spaced out further")
 			.onClick(() => void this.submit(item, state, wrap, false, "sure"));
-		if (q.type === "short" || q.type === "command" || q.type === "image") {
-			new ButtonComponent(actions).setButtonText("I don't know")
-				.onClick(() => { state.text = ""; void this.submit(item, state, wrap, true); });
-		}
+		const written = q.type === "short" || q.type === "command" || q.type === "image";
+		const giveUp = () => { state.text = ""; void this.submit(item, state, wrap, true); };
+		if (written) new ButtonComponent(actions).setButtonText("I don't know").onClick(giveUp);
 		actions.createSpan({ cls: "rl-hint", text: "Guessing or sure? Saying so tunes when this comes back." });
+		const mod = Platform.isMacOS ? "⌘" : "Ctrl";
+		actions.createDiv({
+			cls: "rl-keys",
+			text: options.length
+				? `Keys: 1–${Math.min(9, options.length)} choose · Enter submit · G guessing · S sure`
+				: `Keys: ${mod}+Enter submit · Esc leaves the box, then G guessing · S sure${written ? " · D don't know" : ""}`,
+		});
+
+		this.examKeys = {
+			choose: (slot) => options[slot]?.click(),
+			submit: (confidence) => void this.submit(item, state, wrap, false, confidence),
+			skip: written ? giveUp : undefined,
+			focus: () => submit.buttonEl.focus(),
+		};
 		submit.buttonEl.focus();
 	}
 
-	private renderAnswerWidget(q: Question, el: HTMLElement, state: AnswerState): void {
+	/** Draws the answer controls. Returns the option inputs in display order, for the 1–9 keys. */
+	private renderAnswerWidget(q: Question, el: HTMLElement, state: AnswerState): HTMLInputElement[] {
 		if (q.type === "mcq" || q.type === "multi") {
 			const multi = q.type === "multi";
 			if (multi) el.createDiv({ cls: "rl-hint", text: "Select every correct option." });
 
 			// Fresh random order each render; state.chosen keeps ORIGINAL indices.
 			const order = shuffled((q.choices ?? []).map((_, i) => i));
+			const inputs: HTMLInputElement[] = [];
 			order.forEach((original, slot) => {
 				const row = el.createDiv({ cls: "rl-choice" });
 				const input = row.createEl("input", {
 					type: multi ? "checkbox" : "radio",
 					attr: { name: `q-${q.id}`, id: `c-${q.id}-${slot}` },
 				});
+				inputs.push(input);
 				void this.md(q.choices![original], row.createEl("label", { attr: { for: `c-${q.id}-${slot}` } }));
-				row.onclick = (e) => { if (e.target !== input) input.click(); };
+				// A click on the label already reaches the input; clicking it again
+				// here toggled a checkbox straight back, so the text never selected.
+				row.onclick = (e) => {
+					if (e.target !== input && !(e.target instanceof Element && e.target.closest("label"))) input.click();
+				};
 				input.onchange = () => {
 					if (multi) {
 						state.chosen = state.chosen.includes(original)
@@ -696,7 +775,7 @@ export class RecallLabView extends ItemView {
 					el.querySelectorAll(".rl-choice").forEach((c, ci) => c.toggleClass("rl-chosen", state.chosen.includes(order[ci])));
 				};
 			});
-			return;
+			return inputs;
 		}
 
 		if (q.type === "image") {
@@ -719,7 +798,7 @@ export class RecallLabView extends ItemView {
 			drop.tabIndex = 0;
 			const note = el.createEl("textarea", { cls: "rl-text", attr: { placeholder: "Explain what the image shows." } });
 			note.oninput = () => (state.text = note.value);
-			return;
+			return [];
 		}
 
 		const area = el.createEl("textarea", {
@@ -731,6 +810,7 @@ export class RecallLabView extends ItemView {
 		});
 		area.oninput = () => (state.text = area.value);
 		window.setTimeout(() => area.focus(), 0);
+		return [];
 	}
 
 	private async submit(
@@ -848,6 +928,8 @@ export class RecallLabView extends ItemView {
 		const last = this.index === this.examItems.length - 1;
 		new ButtonComponent(next).setButtonText(last ? "Finish" : "Next").setCta()
 			.onClick(() => void this.advance()).buttonEl.focus();
+		next.createSpan({ cls: "rl-hint", text: "Enter or Space" });
+		if (this.examKeys) this.examKeys.next = () => void this.advance();
 		return panel;
 	}
 
@@ -1203,6 +1285,7 @@ export class RecallLabView extends ItemView {
 		stat("Mean score", `${mean}%`);
 		stat("Notes completed", String(Object.keys(progress.completed ?? {}).length));
 
+		await this.renderActivity(main, progress);
 		this.renderCalibration(main, progress.attempts);
 
 		// Weakest topics across everything.
@@ -1248,6 +1331,63 @@ export class RecallLabView extends ItemView {
 				for (const t of s.weakTopics.slice(0, 6)) chips.createSpan({ cls: "rl-chip", text: t });
 			}
 		}
+	}
+
+	/**
+	 * The vault-wide day-by-day record behind the streak and the calendar.
+	 * Finished days are kept the first time they are worked out, so moving
+	 * the target recall later cannot rewrite them (see settledRecord).
+	 */
+	private async dayRecord(progress: ProgressFile, now: Date): Promise<DayRecord[]> {
+		const keys = keysOf(Store.itemsOf(this.banks));
+		const { days, settle } = settledRecord(progress.attempts, this.plugin.settings.targetRecall / 100, keys, now, progress.days ?? {});
+		if (Object.keys(settle).length) {
+			try {
+				await this.plugin.store.keepDays(settle);
+			} catch (e) {
+				this.plugin.log.error("could not keep the daily record", { error: String(e) });
+			}
+		}
+		return days;
+	}
+
+	/** The streak, and a year of daily activity in the style of a contributions calendar. */
+	private async renderActivity(main: HTMLElement, progress: ProgressFile): Promise<void> {
+		const now = new Date();
+		const days = await this.dayRecord(progress, now);
+		if (!days.length) return;
+		const streak = streakOf(days);
+
+		const panel = main.createDiv({ cls: "rl-panel" });
+		const head = panel.createDiv({ cls: "rl-panel-head" });
+		head.createEl("h3", { text: "Activity" });
+		head.createSpan({ cls: "rl-grade-pill", text: `${streak.current}-day streak · best ${streak.longest}` });
+		panel.createDiv({
+			cls: "rl-muted",
+			text: "A day counts toward the streak when it ends with nothing overdue. Today cannot break it until it is over.",
+		});
+
+		// A year of weeks, Sunday at the top, today in the last column. Days
+		// that ended with reviews overdue are outlined.
+		const byDay = new Map(days.map((d) => [d.day, d]));
+		const most = Math.max(1, ...days.map((d) => d.answers));
+		const today = startOfDay(now);
+		const scroller = panel.createDiv({ cls: "rl-calendar-scroll" });
+		const grid = scroller.createDiv({ cls: "rl-calendar" });
+		for (
+			let d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 52 * 7 - today.getDay());
+			d.getTime() <= today.getTime();
+			d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)
+		) {
+			const rec = byDay.get(d.getTime());
+			const n = rec?.answers ?? 0;
+			const missed = Boolean(rec && !rec.clear && d.getTime() < today.getTime());
+			const cell = grid.createDiv({ cls: `rl-day rl-day-${n ? Math.min(4, Math.ceil((n / most) * 4)) : 0}` });
+			if (missed) cell.addClass("rl-day-missed");
+			const date = d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+			cell.setAttr("title", `${date}: ${n} answer${n === 1 ? "" : "s"}${missed ? " · reviews left overdue" : ""}`);
+		}
+		window.setTimeout(() => (scroller.scrollLeft = scroller.scrollWidth), 0);
 	}
 
 	/** Whether "sure" really means sure: how often each level of confidence was right. */

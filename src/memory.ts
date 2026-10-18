@@ -1,5 +1,5 @@
 import { createEmptyCard, fsrs, Rating, type Card, type FSRS, type Grade } from "ts-fsrs";
-import { Attempt, ExamItem, Tier, qkey } from "./types";
+import { Attempt, DayLog, ExamItem, Tier, qkey } from "./types";
 
 const DAY = 86_400_000;
 
@@ -76,6 +76,7 @@ export class Memory {
 	private cards = new Map<string, Card>();
 	/** When each question was first answered, in ms. */
 	private first = new Map<string, number>();
+	private pace = new Pace();
 	private scheduler: FSRS;
 
 	/**
@@ -96,24 +97,36 @@ export class Memory {
 			enable_short_term: false,
 		});
 		const cutoff = until ? until.getTime() : Infinity;
-		const ordered = attempts.slice().sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
-		const pace = new Pace();
-		for (const a of ordered) {
-			const at = Date.parse(a.ts);
-			if (Number.isNaN(at) || at > cutoff || !counts(a)) continue;
-			const key = qkey(a.bankId, a.questionId);
-			const when = new Date(at);
-			const card = this.cards.get(key) ?? createEmptyCard<Card>(when);
-			const rating = ratingFor(a, pace.quick(a));
-			const next = this.scheduler.next(card, when, rating).card;
-			// Without short-term steps, Again waits as long as the post-lapse
-			// stability (4 days after three reviews, 8 after five). A miss should
-			// come back the next day, so cap it there.
-			if (rating === Rating.Again) next.due = new Date(Math.min(next.due.getTime(), at + DAY));
-			this.cards.set(key, next);
-			pace.add(a);
-			if (!this.first.has(key)) this.first.set(key, at);
+		for (const a of inTimeOrder(attempts)) {
+			if (Date.parse(a.ts) > cutoff) break;
+			this.apply(a);
 		}
+	}
+
+	/** Replays one more answer. Answers must arrive in time order. */
+	apply(a: Attempt): void {
+		const at = Date.parse(a.ts);
+		if (Number.isNaN(at) || !counts(a)) return;
+		const key = qkey(a.bankId, a.questionId);
+		const when = new Date(at);
+		const card = this.cards.get(key) ?? createEmptyCard<Card>(when);
+		const rating = ratingFor(a, this.pace.quick(a));
+		const next = this.scheduler.next(card, when, rating).card;
+		// Without short-term steps, Again waits as long as the post-lapse
+		// stability (4 days after three reviews, 8 after five). A miss should
+		// come back the next day, so cap it there.
+		if (rating === Rating.Again) next.due = new Date(Math.min(next.due.getTime(), at + DAY));
+		this.cards.set(key, next);
+		this.pace.add(a);
+		if (!this.first.has(key)) this.first.set(key, at);
+	}
+
+	/** Whether any of these questions is due at or before `when`. */
+	anyDueBy(when: Date, keys: Set<string>): boolean {
+		for (const [key, card] of this.cards) {
+			if (keys.has(key) && card.due.getTime() <= when.getTime()) return true;
+		}
+		return false;
 	}
 
 	/** Whether this question has ever been answered. */
@@ -202,6 +215,13 @@ export function dayOffset(date: Date, now: Date): number {
 	return Math.round((startOfDay(date).getTime() - startOfDay(now).getTime()) / DAY);
 }
 
+/** Answers with a readable timestamp, oldest first. */
+function inTimeOrder(attempts: Attempt[]): Attempt[] {
+	return attempts
+		.filter((a) => !Number.isNaN(Date.parse(a.ts)))
+		.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+}
+
 /** Local midnight at the start of `now`'s day. */
 export function startOfDay(now: Date): Date {
 	const d = new Date(now);
@@ -220,6 +240,102 @@ export function endOfDay(now: Date): Date {
 	return d;
 }
 
+export interface DayRecord {
+	/** Local midnight that starts the day, in ms. */
+	day: number;
+	/** Answers given that day. */
+	answers: number;
+	/** Whether nothing in scope was left overdue when the day ended. */
+	clear: boolean;
+}
+
+/**
+ * Day by day, from the first answer to today: how much you answered, and
+ * whether you went to bed with nothing overdue. Built in one pass over the
+ * history, checking the schedule at each midnight.
+ */
+export function dailyRecord(attempts: Attempt[], retention: number, keys: Set<string>, now: Date): DayRecord[] {
+	const ordered = inTimeOrder(attempts);
+	if (!ordered.length) return [];
+	const memory = new Memory([], retention);
+	const out: DayRecord[] = [];
+	const last = startOfDay(now).getTime();
+	let i = 0;
+	for (let day = startOfDay(new Date(Date.parse(ordered[0].ts))); day.getTime() <= last; ) {
+		const end = endOfDay(day);
+		let answers = 0;
+		while (i < ordered.length && Date.parse(ordered[i].ts) <= end.getTime()) {
+			memory.apply(ordered[i]);
+			answers += 1;
+			i += 1;
+		}
+		out.push({ day: day.getTime(), answers, clear: !memory.anyDueBy(end, keys) });
+		// Stepping the calendar date, not adding 24h, keeps days whole across DST.
+		day = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
+	}
+	return out;
+}
+
+/** A local calendar date as YYYY-MM-DD. */
+export function dateKey(day: Date): string {
+	const pad = (n: number) => String(n).padStart(2, "0");
+	return `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`;
+}
+
+/**
+ * The daily record with finished days frozen. Whether a day ended clear
+ * depends on the schedule, and the schedule on the target recall: worked out
+ * afresh, raising the target turns past clear days overdue and breaks a
+ * streak earned under the old one. So a finished day is worked out once and
+ * kept, and a kept day is taken as kept; only today stays live. `settle`
+ * holds the finished days not kept yet.
+ */
+export function settledRecord(
+	attempts: Attempt[], retention: number, keys: Set<string>, now: Date, kept: Record<string, DayLog>,
+): { days: DayRecord[]; settle: Record<string, DayLog> } {
+	const today = startOfDay(now).getTime();
+	const settle: Record<string, DayLog> = {};
+	const days = dailyRecord(attempts, retention, keys, now).map((d) => {
+		const key = dateKey(new Date(d.day));
+		const old = kept[key];
+		if (old) return { day: d.day, answers: old.answers, clear: old.clear };
+		if (d.day < today) settle[key] = { answers: d.answers, clear: d.clear };
+		return d;
+	});
+	return { days, settle };
+}
+
+export interface Streak {
+	/** Days in a row, up to today, with nothing left overdue. */
+	current: number;
+	longest: number;
+	/** Whether today already counts. If not, it still can: the day is not over. */
+	today: boolean;
+}
+
+/**
+ * The streak counts days you kept on top of your reviews, not how much you
+ * answered: a day counts when nothing was left overdue at its end. Today
+ * never breaks it, because it is not over yet.
+ */
+export function streakOf(days: DayRecord[]): Streak {
+	let longest = 0;
+	let run = 0;
+	for (const d of days) {
+		run = d.clear ? run + 1 : 0;
+		longest = Math.max(longest, run);
+	}
+	const today = days.length > 0 && days[days.length - 1].clear;
+	let i = days.length - 1;
+	if (!today) i -= 1;
+	let current = 0;
+	while (i >= 0 && days[i].clear) {
+		current += 1;
+		i -= 1;
+	}
+	return { current, longest, today };
+}
+
 export interface ReviewPlan {
 	/** Answered before and due now, most at risk of being forgotten first. */
 	due: ExamItem[];
@@ -230,11 +346,11 @@ export interface ReviewPlan {
 const TIER_ORDER: Record<Tier, number> = { easy: 0, hard: 1, brutal: 2 };
 
 /**
- * Today's review. Everything due comes first, most at risk first, so ending a
- * session early still covers what matters most. Then new questions, up to the
- * day's allowance, and only from notes marked complete or already examined:
- * never from a note not read yet. Completed notes go first, oldest first, and
- * within a note easy questions come before hard ones.
+ * Today's review. Everything due today comes first, most at risk first, so
+ * ending a session early still covers what matters most. Then new questions,
+ * up to the day's allowance, and only from notes marked complete or already
+ * examined: never from a note not read yet. Completed notes go first, oldest
+ * first, and within a note easy questions come before hard ones.
  */
 export function planReview(p: {
 	items: ExamItem[];
@@ -247,8 +363,9 @@ export function planReview(p: {
 	noteOf: (bankId: string) => string | undefined;
 }): ReviewPlan {
 	const { items, memory, now } = p;
+	const today = endOfDay(now);
 	const due = items
-		.filter((it) => memory.isDue(keyOf(it), endOfDay(now)))
+		.filter((it) => memory.isDue(keyOf(it), today))
 		.map((it) => ({ it, r: memory.recall(keyOf(it), now) ?? 0 }))
 		.sort((a, b) => a.r - b.r)
 		.map((e) => e.it);

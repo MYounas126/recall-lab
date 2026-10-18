@@ -554,7 +554,29 @@
 
 .rl-collapsed { display: none; }
 .rl-panel-confident { border-left: 3px solid var(--text-warning); }
+
+.rl-keys {
+	flex-basis: 100%;
+	font-size: var(--font-ui-smaller); color: var(--text-faint);
+}
+.rl-streak { font-size: var(--font-ui-smaller); color: var(--text-muted); }
+
+.rl-calendar-scroll { overflow-x: auto; padding: 0.4rem 0 0.3rem; }
+.rl-calendar {
+	display: grid; grid-auto-flow: column;
+	grid-template-rows: repeat(7, 11px); grid-auto-columns: 11px;
+	gap: 3px; width: max-content;
+}
+.rl-day { border-radius: 2px; background: var(--background-modifier-border); }
+.rl-day-1 { background: color-mix(in srgb, var(--interactive-accent) 30%, transparent); }
+.rl-day-2 { background: color-mix(in srgb, var(--interactive-accent) 55%, transparent); }
+.rl-day-3 { background: color-mix(in srgb, var(--interactive-accent) 80%, transparent); }
+.rl-day-4 { background: var(--interactive-accent); }
+.rl-day-missed { outline: 1px solid var(--text-error); outline-offset: -1px; }
 .rl-confirm-list {
 	max-height: 14rem; overflow: auto;
 	font-size: 0.9em; color: var(--text-muted);
 }
+
+/* The view is focusable only to keep exam shortcuts working after a click. */
+.recall-lab:focus { outline: none; }

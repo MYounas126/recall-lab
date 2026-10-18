@@ -73,6 +73,15 @@ further. Plain *Submit* claims neither. Mistakes you were sure about get their
 own list on the results screen (they stick unusually well once corrected), and
 History shows how often each level of confidence turned out right.
 
+**Streaks and keys.** Your streak counts days that end with nothing overdue,
+not how much you answered, and today cannot break it until it is over. A day
+is recorded once it ends, so changing the target recall later never rewrites
+it. History shows a year of activity as a calendar, with days that ended overdue
+outlined. On the exam screen, `1`–`9` pick an option, `Enter` submits, `G` and
+`S` submit as Guessing and Sure, `D` gives up on a written answer, and `Enter`
+or `Space` moves on. In a text box, `Cmd`/`Ctrl`+`Enter` submits and `Esc`
+leaves the box.
+
 **Settings → Daily review** sets the target recall (90% by default; higher
 means more frequent reviews) and how many new questions a day may bring in
 (20). The schedule itself is never stored: it is rebuilt from `attempts.json`
