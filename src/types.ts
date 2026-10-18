@@ -81,6 +81,9 @@ export interface ExamItem {
 
 export type Verdict = "correct" | "partial" | "incorrect";
 
+/** How sure you said you were. "unsure" is a plain Submit: no claim either way. */
+export type Confidence = "guess" | "unsure" | "sure";
+
 export interface Attempt {
 	ts: string;
 	sessionId: string;
@@ -101,6 +104,8 @@ export interface Attempt {
 	 */
 	gradedBy: "local" | "ai" | "self" | "error";
 	ms: number;
+	/** How sure you said you were. Absent on answers from before it was asked, and on skips. */
+	confidence?: Confidence;
 }
 
 export interface SessionSummary {

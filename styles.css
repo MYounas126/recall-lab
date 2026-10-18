@@ -553,6 +553,7 @@
 }
 
 .rl-collapsed { display: none; }
+.rl-panel-confident { border-left: 3px solid var(--text-warning); }
 .rl-confirm-list {
 	max-height: 14rem; overflow: auto;
 	font-size: 0.9em; color: var(--text-muted);

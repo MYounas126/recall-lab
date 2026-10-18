@@ -8,14 +8,53 @@ export function keyOf(item: ExamItem): string {
 	return qkey(item.bankId, item.q.id);
 }
 
-/** The FSRS rating for one answer: a miss is Again, a partial answer Hard, a correct one Good. */
-export function ratingFor(a: Attempt): Grade {
+/**
+ * The FSRS rating for one answer. A miss is Again and a partial answer Hard.
+ * A right answer you were only guessing at is not knowledge yet, so it is
+ * rated as a miss. Right, sure and quicker than usual is Easy; any other
+ * right answer is Good.
+ */
+export function ratingFor(a: Attempt, quick = false): Grade {
 	// By score, not verdict: Hard is a passing grade in FSRS, so a mostly-wrong
 	// "partial" (a select-all answer with one right pick in five) must not count
 	// as remembered.
 	if (a.score < 60) return Rating.Again;
 	if (a.score < 90) return Rating.Hard;
+	if (a.confidence === "guess") return Rating.Again;
+	if (a.confidence === "sure" && quick) return Rating.Easy;
 	return Rating.Good;
+}
+
+/** Correct answers of a type needed before "quicker than usual" means anything. */
+const PACE_BASELINE = 5;
+
+/**
+ * Judges whether an answer was quick: at or under the median time of your
+ * earlier correct answers to the same type of question. Only earlier answers
+ * count, so a later answer never changes how an earlier one was rated.
+ */
+export class Pace {
+	private sorted = new Map<string, number[]>();
+
+	quick(a: Attempt): boolean {
+		const prior = this.sorted.get(a.type) ?? [];
+		if (prior.length < PACE_BASELINE) return false;
+		return a.ms <= prior[Math.floor(prior.length / 2)];
+	}
+
+	add(a: Attempt): void {
+		if (a.verdict !== "correct" || !Number.isFinite(a.ms)) return;
+		const list = this.sorted.get(a.type) ?? [];
+		let lo = 0;
+		let hi = list.length;
+		while (lo < hi) {
+			const mid = (lo + hi) >> 1;
+			if (list[mid] < a.ms) lo = mid + 1;
+			else hi = mid;
+		}
+		list.splice(lo, 0, a.ms);
+		this.sorted.set(a.type, list);
+	}
 }
 
 /**
@@ -58,19 +97,21 @@ export class Memory {
 		});
 		const cutoff = until ? until.getTime() : Infinity;
 		const ordered = attempts.slice().sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+		const pace = new Pace();
 		for (const a of ordered) {
 			const at = Date.parse(a.ts);
 			if (Number.isNaN(at) || at > cutoff || !counts(a)) continue;
 			const key = qkey(a.bankId, a.questionId);
 			const when = new Date(at);
 			const card = this.cards.get(key) ?? createEmptyCard<Card>(when);
-			const rating = ratingFor(a);
+			const rating = ratingFor(a, pace.quick(a));
 			const next = this.scheduler.next(card, when, rating).card;
 			// Without short-term steps, Again waits as long as the post-lapse
 			// stability (4 days after three reviews, 8 after five). A miss should
 			// come back the next day, so cap it there.
 			if (rating === Rating.Again) next.due = new Date(Math.min(next.due.getTime(), at + DAY));
 			this.cards.set(key, next);
+			pace.add(a);
 			if (!this.first.has(key)) this.first.set(key, at);
 		}
 	}
