@@ -5,8 +5,8 @@ import { clozeBlanks, clozePieces, gradeLocally, sameValue } from "./grader";
 import { shuffled } from "./util";
 import { QuestionScore, renderRadar, scoreAxes, scoreCourses, weakestTested, untested, withBefore, AxisScore } from "./radar";
 import {
-	Attempt, Bank, BlurtResult, Confidence, Course, ExamItem, Lab, ProgressFile, Question, SessionSummary, Tier,
-	TeachResult, Turn, idOf, labScore, letterGrade, qkey,
+	Attempt, Bank, BlurtResult, Confidence, Course, ExamItem, Lab, LabProgress, ProgressFile, Question, SessionSummary, Tier,
+	TeachResult, Turn, idOf, isBinaryLab, labScore, letterGrade, qkey,
 } from "./types";
 import { AnswerIndex, calibration } from "./history";
 import {
@@ -24,6 +24,7 @@ import { needingSteps, needsGuidance } from "./guided";
 import { SECOND_TRY_CAP, combineTries } from "./tasks";
 import { blurtExam, missedHeading } from "./blurt";
 import { checkFlag, hashFlag, hintsNeedShortening } from "./labs";
+import { briefFooter } from "./crackme";
 import { INSTALL_HINT } from "./claude";
 import { Gate, GateRule, gatesOf, isOpen, lockedTiers, opened, tierNames, whyLocked } from "./gates";
 import { isHighlightBank } from "./highlights";
@@ -1265,18 +1266,33 @@ export class RecallLabView extends ItemView {
 		const solved = labs.filter((l) => progress.labs?.[l.id]?.solvedAt).length;
 		if (labs.length) head.createSpan({ cls: "rl-grade-pill", text: `${solved}/${labs.length} solved` });
 
+		// A challenge is built from one note, so the note is picked here.
+		const buildChallenge = () => {
+			const notes = this.plugin.store.notesIn(folder);
+			if (!notes.length) { new Notice("This course has no notes yet."); return; }
+			new PickNoteModal(this.app, notes, (note) => void this.plugin.offerChallenge(note)).open();
+		};
+
 		if (!labs.length) {
 			panel.createDiv({
 				cls: "rl-muted",
-				text: "No labs yet. Press Labs beside a note below and Claude writes CTF-style challenges for it — one source file each, nothing to install.",
+				text: "No labs yet. Press Labs beside a note below for challenges you solve by reading, or build a " +
+					"binary challenge to reverse with your own tools.",
 			});
+			new ButtonComponent(panel.createDiv({ cls: "rl-actions" }))
+				.setButtonText("Build a binary challenge…")
+				.onClick(buildChallenge);
 			return;
 		}
 
 		panel.createDiv({
 			cls: "rl-muted",
-			text: "Hands-on challenges. You get one source file, work out the flag by reading it, and submit it here.",
+			text: "Hands-on challenges. Source labs are solved by reading; a binary challenge is compiled, and you " +
+				"reverse it with your own tools. Either way the flag comes back here.",
 		});
+		new ButtonComponent(head).setButtonText("Build a binary challenge…")
+			.setTooltip("Claude designs a reversing challenge from one of this course's notes (uses Claude)")
+			.onClick(buildChallenge);
 
 		const order: Record<string, number> = { easy: 0, hard: 1, brutal: 2 };
 		for (const lab of labs.slice().sort((a, b) => order[a.tier] - order[b.tier] || a.title.localeCompare(b.title))) {
@@ -2458,9 +2474,11 @@ export class RecallLabView extends ItemView {
 		await this.md(lab.brief, briefPanel.createDiv());
 		if (lab.minutes) briefPanel.createDiv({ cls: "rl-muted", text: `Expect about ${lab.minutes} minutes.` });
 
-		// The challenge itself, on screen. These labs are solvable by reading, so
-		// making the learner go hunting on disk for the file was the wrong shape.
-		for (const f of lab.files) {
+		// A binary challenge is the binary: its source is the answer, and stays
+		// hidden until the flag is in hand. A source lab shows its file instead,
+		// because those are meant to be solved by reading.
+		if (isBinaryLab(lab)) this.renderChallengeFiles(main, lab, Boolean(prog.solvedAt || prog.gaveUpAt));
+		else for (const f of lab.files) {
 			const panel = main.createDiv({ cls: "rl-panel rl-challenge" });
 			const ph = panel.createDiv({ cls: "rl-panel-head" });
 			ph.createEl("h3", { text: f.path });
@@ -2564,6 +2582,7 @@ export class RecallLabView extends ItemView {
 		}
 
 		// Optional: put it on disk, for anyone who wants to compile or run it.
+		if (isBinaryLab(lab)) return this.finishLab(main, lab, prog);
 		const wsPanel = main.createDiv({ cls: "rl-panel" });
 		const wsHead = wsPanel.createDiv({ cls: "rl-panel-head" });
 		wsHead.createEl("h3", { text: "Optional: work on it locally" });
@@ -2592,7 +2611,49 @@ export class RecallLabView extends ItemView {
 				}
 			});
 
-		// Solution, only once it can no longer be cheated with
+		await this.finishLab(main, lab, prog);
+	}
+
+	/** Where to find a binary challenge, and its source once it can no longer spoil it. */
+	private renderChallengeFiles(main: HTMLElement, lab: Lab, revealed: boolean): void {
+		const dir = this.plugin.labs.dir(lab);
+		const binary = `${dir}/${lab.build!.output}`;
+		const panel = main.createDiv({ cls: "rl-panel rl-challenge" });
+		panel.createEl("h3", { text: "The challenge" });
+		panel.createDiv({
+			cls: "rl-muted",
+			text: "An x86-64 Linux binary. It reads from stdin and prints the flag only when the input is right. " +
+				"Copy it to wherever you reverse things and take it apart with your own tools.",
+		});
+		panel.createEl("pre", { cls: "rl-code" }).createEl("code", { text: binary });
+
+		const actions = panel.createDiv({ cls: "rl-actions" });
+		const copyPath = new ButtonComponent(actions).setButtonText("Copy the path");
+		copyPath.onClick(() => {
+			void navigator.clipboard.writeText(binary);
+			copyPath.setButtonText("Copied");
+			window.setTimeout(() => { copyPath.setButtonText("Copy the path"); }, 1500);
+		});
+		if (!this.plugin.labs.exists(lab)) {
+			panel.createDiv({ cls: "rl-muted", text: "The binary is not on disk. It can be built again from the source kept with the lab." });
+			const again = new ButtonComponent(actions).setButtonText("Rebuild it");
+			again.onClick(async () => {
+				again.setDisabled(true);
+				if (await this.plugin.rebuildChallenge(lab)) await this.render();
+				else again.setDisabled(false);
+			});
+		}
+
+		if (!revealed) return;
+		for (const f of lab.files) {
+			const src = main.createDiv({ cls: "rl-panel rl-challenge" });
+			src.createEl("h3", { text: `${f.path} — how it was built` });
+			src.createEl("pre", { cls: "rl-code rl-challenge-code" }).createEl("code", { text: f.content });
+		}
+	}
+
+	/** The solution, once it can no longer be cheated with, or the way to give up. */
+	private async finishLab(main: HTMLElement, lab: Lab, prog: LabProgress): Promise<void> {
 		if (prog.solvedAt || prog.gaveUpAt) {
 			const sol = main.createDiv({ cls: "rl-panel" });
 			sol.createEl("h3", { text: "How it was meant to go" });
@@ -2784,6 +2845,58 @@ export class RecallLabView extends ItemView {
 }
 
 /** A plain yes/no dialog, used before anything slow, costly or destructive. */
+/** Picks which note a challenge is built from. */
+export class PickNoteModal extends Modal {
+	constructor(app: App, private notes: string[], private onPick: (note: string) => void) {
+		super(app);
+	}
+
+	onOpen(): void {
+		this.contentEl.createEl("h3", { text: "Which note?" });
+		this.contentEl.createDiv({ cls: "rl-muted", text: "The challenge is built from this note's subject matter." });
+		const list = this.contentEl.createDiv({ cls: "rl-confirm-list" });
+		for (const note of this.notes) {
+			const row = list.createDiv({ cls: "rl-pick-row rl-clickable" });
+			row.setText(note.split("/").pop()!.replace(/\.md$/, ""));
+			row.onclick = () => { this.close(); this.onPick(note); };
+		}
+		new ButtonComponent(this.contentEl.createDiv({ cls: "rl-actions" })).setButtonText("Cancel").onClick(() => this.close());
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+	}
+}
+
+/** Picks how hard a binary challenge should be, and says what it will cost. */
+export class ChallengeModal extends Modal {
+	constructor(app: App, private note: string, private onPick: (tier: Tier) => void) {
+		super(app);
+	}
+
+	onOpen(): void {
+		this.contentEl.createEl("h3", { text: `Build a challenge from "${this.note}"` });
+		this.contentEl.createEl("p", {
+			text: "Claude designs a reverse-engineering challenge from this note, and Recall Lab compiles it and " +
+				"checks it can be solved. You get an x86-64 Linux binary to reverse with your own tools. " +
+				"This takes a few minutes and uses your Claude plan.",
+		});
+		const row = this.contentEl.createDiv({ cls: "rl-actions" });
+		const pick = (tier: Tier, label: string, hint: string) => {
+			new ButtonComponent(row).setButtonText(label).setTooltip(hint)
+				.onClick(() => { this.close(); this.onPick(tier); });
+		};
+		pick("easy", "Easy", "One mechanism, traced carefully");
+		pick("hard", "Hard", "A transformation to invert, or control flow to untangle");
+		pick("brutal", "Brutal", "Several stages: a bytecode machine, or a chain of them");
+		new ButtonComponent(row).setButtonText("Cancel").onClick(() => this.close());
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+	}
+}
+
 export class ConfirmModal extends Modal {
 	constructor(
 		app: App,

@@ -1,11 +1,15 @@
 import { App, TFile, normalizePath } from "obsidian";
 import { ClaudeCli } from "./claude";
 import { Store } from "./store";
-import { Attempt, Bank, BlurtResult, Course, Diagnosis, Lab, Question, QuestionType, TeachResult, Turn, Verdict } from "./types";
+import { Attempt, Bank, BlurtResult, Course, Diagnosis, Lab, Question, QuestionType, TeachResult, Tier, Turn, Verdict } from "./types";
 import type { Leech } from "./leeches";
 import { Section, blurtPrompt, headingsOf, parseBlurt, sectionsOf } from "./blurt";
 import { parseStudent, parseTeachScore, studentPrompt, teachScorePrompt } from "./teach";
-import { describeToolchain, detectToolchain, flagCodes, hashFlag, leaksFlag, nudges, validateLab, verifyCheck, writtenInOrder } from "./labs";
+import { LabStore, describeToolchain, detectToolchain, flagCodes, hashFlag, leaksFlag, nudges, validateLab, verifyCheck, writtenInOrder } from "./labs";
+import { Sandbox } from "./sandbox";
+import { MARK, SOLVE_INPUT, briefFooter, buildScript, challengeProblem, crackmePrompt, parseBuild, parseBuildOutput } from "./crackme";
+import * as fs from "fs";
+import * as nodePath from "path";
 import type { Strictness } from "./settings";
 import { hashText } from "./util";
 import { answeredTo, plain } from "./answers";
@@ -86,8 +90,109 @@ export class Tasks {
 		private strictness: () => Strictness,
 		private banksFolder: () => string,
 		private coursesFolder: () => string,
-		private labsFolder: () => string = () => "_quiz/labs"
+		private labsFolder: () => string = () => "_quiz/labs",
+		/** Builds and checks binary challenges; without it, only source labs can be written. */
+		private sandbox?: Sandbox,
+		private labs?: LabStore
 	) {}
+
+	/**
+	 * Writes one binary challenge for a note. Claude designs it, the sandbox
+	 * compiles it and runs it once on the input that is meant to solve it, and
+	 * the finished program is put where you can pick it up. A challenge that
+	 * does not build, does not print its flag on that input, or whose flag can
+	 * be read straight out of the binary is thrown away.
+	 *
+	 * The input that solves it is never stored: that is the answer.
+	 */
+	async generateCrackme(notePath: string, course: Course, tier: Tier, avoid: string[] = []): Promise<Lab | { error: string }> {
+		if (!this.sandbox || !this.labs) return { error: "the challenge builder is not available" };
+		const file = this.app.vault.getAbstractFileByPath(notePath);
+		if (!(file instanceof TFile)) return { error: `${notePath} is not a note.` };
+		const content = await this.app.vault.cachedRead(file);
+		const title = file.basename;
+
+		const res = await this.cli.askJson<Lab & { flag?: string; solve?: { stdin?: string }; build?: unknown }>(
+			crackmePrompt(title, content, course, tier, avoid), 480000
+		);
+		if (!res.ok) return { error: res.error };
+		const r = res.data;
+
+		if (!r?.flag || typeof r.flag !== "string") return { error: "it came back without a flag" };
+		const solveInput = typeof r.solve?.stdin === "string" ? r.solve.stdin : null;
+		if (solveInput === null) return { error: "it came back without the input that solves it" };
+		const sources = Array.isArray(r.files) ? r.files.filter((f) => f?.path && typeof f.content === "string") : [];
+		if (!sources.length) return { error: "it came back without source" };
+		const build = parseBuild(r.build);
+		if (typeof build === "string") return { error: build };
+
+		const axes = new Set(course.axes.map((a) => a.id));
+		const lab: Lab = {
+			id: `${course.id}-${slug(title)}-ctf-${hashFlag(r.flag).slice(0, 6)}`,
+			courseId: course.id,
+			note: notePath,
+			title: String(r.title ?? "Challenge"),
+			axis: axes.has(r.axis) ? r.axis : course.axes[0].id,
+			tier,
+			kind: "binary",
+			build,
+			brief: String(r.brief ?? ""),
+			setup: "",
+			files: sources,
+			hints: Array.isArray(r.hints) ? r.hints.map(String) : [],
+			flagHash: hashFlag(r.flag),
+			flagFormat: String(r.flagFormat ?? "flag{...}"),
+			solution: String(r.solution ?? ""),
+			minutes: typeof r.minutes === "number" ? r.minutes : undefined,
+		};
+
+		// Anything shown before the flag is in hand is redacted, the same way a
+		// source lab's is. The source itself is hidden until it is solved.
+		const redact = (text: string): string => text.split(r.flag!).join(`\`${lab.flagFormat}\``);
+		lab.brief = redact(lab.brief);
+		lab.solution = redact(lab.solution);
+		lab.hints = nudges(lab.hints.map(redact));
+		// Checked after redacting, not through it: what is left is what you see.
+		// The title is never redacted — a flag in it means the challenge is wrong.
+		if ([lab.brief, ...lab.hints, lab.title].join("\n").includes(r.flag)) {
+			return { error: "it still shows its flag before the challenge is solved" };
+		}
+
+		const work = this.labs.buildScratch();
+		try {
+			for (const f of sources) {
+				const target = nodePath.join(work, f.path);
+				if (!nodePath.resolve(target).startsWith(nodePath.resolve(work) + nodePath.sep)) {
+					return { error: `its source path "${f.path}" tries to escape the build` };
+				}
+				fs.mkdirSync(nodePath.dirname(target), { recursive: true });
+				fs.writeFileSync(target, f.content, "utf8");
+			}
+			fs.writeFileSync(nodePath.join(work, SOLVE_INPUT), solveInput, "utf8");
+			fs.writeFileSync(nodePath.join(work, "build.sh"), buildScript(sources.map((f) => f.path), build), "utf8");
+
+			const run = await this.sandbox.run(work, ["sh", "build.sh"], 180000);
+			if (run.timedOut) return { error: "it took too long to build and run" };
+			const out = parseBuildOutput(run.stdout);
+			const problem = challengeProblem(out, r.flag);
+			if (problem) {
+				// A challenge that never compiled has only the compiler to explain it.
+				const compiler = run.stdout.includes(MARK.strings)
+					? ""
+					: `: ${(run.stderr || run.stdout).trim().split("\n").slice(-3).join(" ").slice(0, 300)}`;
+				return { error: problem + compiler };
+			}
+
+			const built = nodePath.join(work, build.output);
+			if (!fs.existsSync(built)) return { error: "it built nothing" };
+			this.labs.placeBinary(lab, built, `# ${lab.title}\n\n${lab.brief}${briefFooter(lab)}\n`);
+		} finally {
+			fs.rmSync(work, { recursive: true, force: true });
+		}
+
+		await this.writeFile(normalizePath(`${this.labsFolder()}/${lab.id}.json`), JSON.stringify(lab, null, 2) + "\n");
+		return lab;
+	}
 
 	// ---------------------------------------------------------------- marking
 
@@ -254,6 +359,33 @@ export class Tasks {
 			);
 		}
 		return out;
+	}
+
+	/** Compiles a challenge again from the source kept with it, when its binary has gone. */
+	async rebuildCrackme(lab: Lab): Promise<string | { error: string }> {
+		if (!this.sandbox || !this.labs) return { error: "the challenge builder is not available" };
+		if (!lab.build) return { error: "that lab is not a binary challenge" };
+		const work = this.labs.buildScratch();
+		try {
+			for (const f of lab.files) {
+				const target = nodePath.join(work, f.path);
+				if (!nodePath.resolve(target).startsWith(nodePath.resolve(work) + nodePath.sep)) {
+					return { error: `its source path "${f.path}" tries to escape the build` };
+				}
+				fs.mkdirSync(nodePath.dirname(target), { recursive: true });
+				fs.writeFileSync(target, f.content, "utf8");
+			}
+			const script = `set -eu\ngcc ${lab.build.cflags.map((c) => `'${c.replace(/'/g, "'\\''")}'`).join(" ")} -o '${lab.build.output}' ${lab.files.map((f) => `'${f.path}'`).join(" ")}`;
+			fs.writeFileSync(nodePath.join(work, "build.sh"), script, "utf8");
+			const run = await this.sandbox.run(work, ["sh", "build.sh"], 120000);
+			const built = nodePath.join(work, lab.build.output);
+			if (run.code !== 0 || !fs.existsSync(built)) {
+				return { error: (run.stderr || run.stdout).trim().split("\n").slice(-2).join(" ").slice(0, 300) || "it did not build" };
+			}
+			return this.labs.placeBinary(lab, built, `# ${lab.title}\n\n${lab.brief}${briefFooter(lab)}\n`);
+		} finally {
+			fs.rmSync(work, { recursive: true, force: true });
+		}
 	}
 
 	// ----------------------------------------------------------- teach it back

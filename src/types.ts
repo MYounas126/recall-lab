@@ -267,6 +267,17 @@ export function letterGrade(score: number): string {
 // ---------------------------------------------------------------- labs
 
 /** One file a lab materialises into its workspace. */
+/** How a lab is handed over: source to read, or a compiled binary to reverse. */
+export type LabKind = "source" | "binary";
+
+/** How a binary challenge is compiled. The learner never sees this. */
+export interface LabBuild {
+	/** Compiler flags, as the challenge needs them. */
+	cflags: string[];
+	/** The built program's file name. */
+	output: string;
+}
+
 export interface LabFile {
 	path: string;
 	content: string;
@@ -301,6 +312,19 @@ export interface Lab {
 	solution: string;
 	/** Roughly how long it should take, in minutes. */
 	minutes?: number;
+	/**
+	 * "binary" hands over a compiled program to reverse, and keeps `files` —
+	 * its source — hidden until it is solved or given up. A lab without this
+	 * is a source lab, which is what every lab was before.
+	 */
+	kind?: LabKind;
+	/** binary labs: how the program is built. */
+	build?: LabBuild;
+}
+
+/** Whether a lab hands over a compiled program rather than source to read. */
+export function isBinaryLab(lab: Lab): boolean {
+	return lab.kind === "binary" && Boolean(lab.build);
 }
 
 export interface LabProgress {

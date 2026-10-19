@@ -179,6 +179,22 @@ Each hint costs 15% of the lab's score. It appears in place, without redrawing t
 
 <p align="center"><img src="images/lab-hints.png" alt="The flag box, and the first of three hints revealed" width="560"></p>
 
+**Binary challenges.** A source lab is solved by reading. A *binary challenge* is the other kind: you get a compiled, stripped x86-64 Linux program and reverse it the way you would a CTF challenge.
+
+Build one from **Build a binary challenge…** in a course's Labs panel, or with the command **Build a binary challenge from this note**. Pick a difficulty:
+
+| Tier | What it asks of you |
+|---|---|
+| Easy | One mechanism, traced carefully: partial-register writes, zero- versus sign-extension, endianness, a table lookup whose index you must follow. |
+| Hard | A transformation to invert — a hand-rolled encoding, a key schedule, a compact instruction decoder — or obfuscated control flow to untangle. |
+| Brutal | Several stages: a bytecode interpreter running an embedded program, a stage whose output keys the next, or code that decodes itself before running. |
+
+The challenge is built from the note's own subject matter, so it tests what you have actually been studying rather than whatever an online challenge happens to cover.
+
+Recall Lab compiles the challenge and runs it once on the input that is meant to solve it. A challenge is thrown away unless that input really prints the flag, and unless the flag is impossible to read out of the binary with `strings`. A password compared against a stored string is rejected for exactly that reason, so what you get always has something to reverse.
+
+The binary lands in `~/RecallLab/labs/<challenge>/`, with a brief beside it. Copy it wherever you work — a Kali VM, say — and use your own tools on it. It reads from stdin and prints the flag only when the input is right. Submit that flag in Recall Lab as usual. The source is kept with the lab but stays hidden until you solve it or give up, and then it is shown as part of the solution.
+
 **Scoring.** A solved lab starts at 100%:
 
 - each hint costs 15%;
@@ -243,6 +259,7 @@ Run these from the command palette. Each one starts with **Recall Lab:**.
 | Write variants for mature questions | Writes reworded versions of questions you have mastered (uses Claude). |
 | Write guided steps for brutal problems | Writes step-by-step build-ups for brutal problems (uses Claude). |
 | Shorten lab hints to CTF-style nudges | Rewrites the long hints of older labs (uses Claude). |
+| Build a binary challenge from this note | Writes a compiled challenge to reverse (uses Claude, and Docker to build it). |
 | Remove leftover quizzes, labs and courses | Moves quizzes, labs and courses whose note or folder is gone to the trash, after you confirm. |
 | Run diagnostics | Reports where the CLI is, whether Claude replies, and what your vault holds. |
 
@@ -255,6 +272,9 @@ To find these, open **Settings → Recall Lab**.
 | Claude | Model | Sonnet | Sonnet is balanced. Opus gives sharper feedback for about three times the usage. Haiku is cheapest. |
 | Claude | Path to the Claude binary | *(empty)* | Leave this empty to find the CLI automatically. |
 | Claude | Check the connection | | Press **Test** to confirm Recall Lab can reach Claude. |
+| Binary challenges | Docker command | *(empty)* | Leave empty to find Docker automatically. |
+| Binary challenges | Docker context | *(empty)* | Which Docker to use, if you keep more than one. |
+| Binary challenges | Check the builder | | Press **Test** to confirm Docker answers and the builder image is ready. |
 | Grading | Strictness | Brutal | How strictly Claude marks open answers: lenient, normal or brutal. |
 | Questions | Recall before recognition | Off | Hides the options of choice questions until you have tried to recall the answer. |
 | Questions | Fill in your highlights | On | Turns `==highlights==` into fill-in-the-blank questions. |
@@ -283,7 +303,7 @@ Everything lives in your vault, apart from labs you choose to write to disk.
 | `_quiz/labs/*.json` | Labs, with each flag stored only as a hash. |
 | `_quiz/progress/attempts.json` | Your full history: every answer, score and piece of feedback, every exam, notes marked complete, lab progress, finished days for the streak, *Write it all down* and *Teach it back* results, and leech diagnoses. If it can't be read, it is never overwritten. |
 | `_quiz/progress/recall-lab.log` | A plain-text log of the last 400 events, for when something goes wrong. |
-| `~/RecallLab/labs/` | Lab files you chose to write to disk, outside the vault. |
+| `~/RecallLab/labs/` | Lab files you chose to write to disk, and the binary of each binary challenge, outside the vault. |
 
 ## Troubleshooting
 
