@@ -869,10 +869,8 @@ export default class RecallLabPlugin extends Plugin {
 		let moved = 0;
 		try {
 			for (const file of files) {
-				// trashFile (Obsidian 1.6.6+) honours the "Deleted files" setting;
-				// older versions fall back to the system trash.
-				if (typeof this.app.fileManager.trashFile === "function") await this.app.fileManager.trashFile(file);
-				else await this.app.vault.trash(file, true);
+				// Honours the "Deleted files" setting: Obsidian's trash or the system's.
+				await this.app.fileManager.trashFile(file);
 				moved += 1;
 			}
 		} catch (e) {
