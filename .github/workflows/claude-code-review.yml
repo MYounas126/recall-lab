@@ -12,10 +12,13 @@ on:
 
 jobs:
   claude-review:
-    # Not on drafts (they are not ready to review) or on Dependabot's PRs:
-    # those get no access to repository secrets, so the review could only fail,
-    # and a version bump is CI's to check.
-    if: github.event.pull_request.draft == false && github.event.pull_request.user.type != 'Bot'
+    # Not on drafts (they are not ready to review), on Dependabot's PRs or on
+    # PRs from forks: those get no access to repository secrets, so the review
+    # could only fail, and a version bump is CI's to check.
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.user.type != 'Bot' &&
+      github.event.pull_request.head.repo.full_name == github.repository
 
     runs-on: ubuntu-latest
     permissions:
