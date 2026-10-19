@@ -1,6 +1,6 @@
 {
   "name": "recall-lab",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Spaced-repetition reviews, tiered exams, CTF-style labs and a skill radar over your notes, marked and written by Claude through the Claude Code CLI. No API key.",
   "main": "main.js",
   "scripts": {

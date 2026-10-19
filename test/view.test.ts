@@ -64,6 +64,7 @@ interface Drawn {
 	view: View;
 	root: HTMLElement;
 	errors: string[];
+	vault: ReturnType<typeof makeVault>;
 }
 
 async function open(files: Record<string, string>, settings: Partial<RecallLabSettings> = {}): Promise<Drawn> {
@@ -86,7 +87,7 @@ async function open(files: Record<string, string>, settings: Partial<RecallLabSe
 	const view = new RecallLabView({ app } as never, plugin as never) as unknown as View;
 	document.body.appendChild(view.containerEl);
 	await view.onOpen();
-	return { view, root: view.contentEl, errors };
+	return { view, root: view.contentEl, errors, vault };
 }
 
 /** What the view shows when a screen throws. */
@@ -177,4 +178,38 @@ test("your highlights count as new questions before their note is complete", asy
 	view.screen = "home";
 	await view.render();
 	assert.match(root.querySelector(".rl-review-panel")!.textContent!, /0 due · 1 new/);
+});
+
+test("on a lab, a wrong flag counts once, the right one solves it, and both are saved", async () => {
+	const { view, root, vault } = await open(vaultFiles());
+	view.openLab = view.allLabs[0];
+	view.screen = "lab";
+	await view.render();
+	const box = () => root.querySelector('input[placeholder="flag{...}"]') as HTMLInputElement;
+	const verdict = () => root.querySelector(".rl-flag-verdict")!.textContent ?? "";
+	const submit = (flag: string) => { box().value = flag; button(root, "Check")!.click(); };
+
+	submit("flag{nope}");
+	await until(() => verdict().includes("1 wrong"));
+	assert.equal(verdict(), "Not the flag. 1 wrong so far.");
+	assert.ok(root.querySelector(".rl-flag-wrong"));
+
+	submit("  flag{nope} ");
+	await until(() => verdict().startsWith("You already tried"));
+	assert.equal(verdict(), "You already tried that one. 1 wrong so far.", "the same guess again costs nothing");
+
+	box().value = "flag{still-wrong}";
+	box().dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+	await until(() => verdict().includes("2 wrong"));
+
+	submit("flag{abc}");
+	await until(() => root.querySelector(".rl-flag-right"));
+	assert.equal(verdict(), "Correct: solved, 95%.", "one wrong flag past the free one costs 5%");
+	assert.ok(box().disabled, "a solved lab takes no more flags");
+
+	const saved = JSON.parse(vault.files.get("_quiz/progress/attempts.json")!).labs["lab-1"];
+	assert.equal(saved.attempts, 2);
+	assert.ok(saved.solvedAt);
+	assert.equal(saved.wrongFlags.length, 2);
+	assert.ok(saved.wrongFlags.every((h: string) => /^[0-9a-f]{64}$/.test(h)), "wrong guesses are kept only as hashes");
 });

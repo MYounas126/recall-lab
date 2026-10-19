@@ -4,12 +4,28 @@ Every release of Recall Lab. Versions follow the plugin's manifest, and each
 release is tagged with the bare version (`0.4.0`), as Obsidian expects. The
 release workflow publishes a version's section below as its release notes.
 
-## [Unreleased]
+## [0.5.2] - 2026-10-19
+
+### Fixed
+
+- **Labs could fail to build for some notes.** Before keeping a lab, Recall
+  Lab checks that its flag can be worked out from the file. That check only
+  recognised flags stored almost in the open: as hex or base64, or as
+  character codes. A flag hidden the way the prompt asks, XOR'd with a key the
+  learner derives from the code, was rejected as unsolvable. For notes where
+  Claude hid every flag that way, every attempt failed. Claude now sends a
+  short check with each lab: the bytes written in the file, the key and the
+  operation. Recall Lab confirms the bytes are in the file and decode to the
+  flag, then drops the check, since the key is the answer. A flag written as a
+  byte array of its character codes is also found now.
+- When every lab is rejected, the message says that trying again writes a
+  fresh set, instead of blaming the note.
 
 ### Development
 
 - CI runs on Node 22 and 24, and releases build on Node 22. Node 20 reached
-  end of life on 30 April 2026. This lets the view tests move to jsdom 30.
+  end of life on 30 April 2026.
+- The view tests run on jsdom 30.
 - Node's type definitions stay on version 22, and Dependabot no longer offers
   new majors of them.
 
@@ -175,7 +191,7 @@ text, shell commands and image answers), marked instantly or by Claude through
 the Claude Code CLI; CTF-style hands-on labs with hashed flags; a skill radar
 per course; and a full answer history.
 
-[Unreleased]: https://github.com/MYounas126/recall-lab/compare/0.5.1...HEAD
+[0.5.2]: https://github.com/MYounas126/recall-lab/releases/tag/0.5.2
 [0.5.1]: https://github.com/MYounas126/recall-lab/releases/tag/0.5.1
 [0.5.0]: https://github.com/MYounas126/recall-lab/releases/tag/0.5.0
 [0.4.0]: https://github.com/MYounas126/recall-lab/releases/tag/0.4.0
