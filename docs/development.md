@@ -33,6 +33,7 @@ To try a build in Obsidian:
 | `src/store.ts` | Reads banks and courses, and saves attempts, sessions and lab progress. |
 | `src/memory.ts` | The FSRS review schedule, rebuilt from the answer history. |
 | `src/radar.ts`, `src/notemap.ts` | The skill radar, and the memory dots on headings. |
+| `src/gates.ts` | The tier gates: which tiers of a quiz are open. |
 | `src/labs.ts`, `highlights.ts`, `blurt.ts`, `teach.ts`, `leeches.ts`, `variants.ts`, `guided.ts`, `recall.ts` | One feature each. |
 | `test/` | Unit tests (see below). |
 | `scripts/` | Release helpers: `check-release.mjs`, `release-notes.mjs` and `version-bump.mjs`. |

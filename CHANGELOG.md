@@ -6,6 +6,19 @@ release workflow publishes a version's section below as its release notes.
 
 ## [Unreleased]
 
+### Added
+
+- **Tier gates.** The *Progression* settings now do what they say:
+  - A quiz's Hard questions are asked once you own 80% of its Easy questions, and its Brutal questions once you own 80% of its Hard ones. Unanswered questions count as zero.
+  - Exams leave locked tiers out, say on their first page what opens them, and offer **Include locked tiers** while the gate is advisory (the default).
+  - Reviews bring in new questions only from open tiers.
+  - The course view marks quizzes with locked tiers with a padlock.
+  - The results page announces each tier a session opens.
+
+### Removed
+
+- The leftover render-check pages from the repository root.
+
 ### Documentation
 
 - A shorter README, with screenshots of the plugin and a diagram of how it
