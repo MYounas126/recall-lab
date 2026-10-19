@@ -473,7 +473,7 @@ export class RecallLabView extends ItemView {
 		plan: ReviewPlan; memory: Memory; keys: Set<string>; progress: ProgressFile; items: ExamItem[]; gates: Map<string, Gate>;
 	}> {
 		const progress = await this.plugin.store.readProgress();
-		const memory = new Memory(progress.attempts, this.plugin.settings.targetRecall / 100);
+		const memory = Memory.of(progress.attempts, this.plugin.settings.targetRecall / 100);
 		const noteOf = new Map(this.everyBank.map((b) => [b.id, b.note]));
 		const items = Store.itemsOf(banks);
 		// New questions wait for their tier to open, advisory gate or not: a
@@ -2348,7 +2348,7 @@ export class RecallLabView extends ItemView {
 		hero.createDiv({ cls: "rl-result-score", text: `${meanScore}%` });
 		const byAi = graded.filter((a) => a.gradedBy === "ai").length;
 		const now = new Date();
-		const memory = new Memory(progress.attempts, this.plugin.settings.targetRecall / 100);
+		const memory = Memory.of(progress.attempts, this.plugin.settings.targetRecall / 100);
 		const tomorrow = memory.forecast(now, 2, keysOf(Store.itemsOf(this.everyBank)))[1];
 		hero.createDiv({
 			cls: "rl-result-sub",

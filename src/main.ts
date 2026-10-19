@@ -311,7 +311,7 @@ export default class RecallLabPlugin extends Plugin {
 		// Highlight questions point at headings too, so they colour the dots.
 		const banks = this.settings.highlightClozes ? [...files, ...(await this.store.listHighlightBanks(courses))] : files;
 		const retention = this.settings.targetRecall / 100;
-		const memory = new Memory(progress.attempts, retention);
+		const memory = Memory.of(progress.attempts, retention);
 		const now = new Date();
 		const today = endOfDay(now);
 		return {
