@@ -4,16 +4,45 @@ Every release of Recall Lab. Versions follow the plugin's manifest, and each
 release is tagged with the bare version (`0.4.0`), as Obsidian expects. The
 release workflow publishes a version's section below as its release notes.
 
-## [Unreleased]
+## [0.5.0] - 2026-10-19
+
+Tier gates make the Progression settings real, and highlights reach your
+reviews sooner. Every screen now draws much faster. The plugin is also ready
+for Obsidian's community directory.
 
 ### Added
 
-- **Tier gates.** The *Progression* settings now do what they say:
-  - A quiz's Hard questions are asked once you own 80% of its Easy questions, and its Brutal questions once you own 80% of its Hard ones. Unanswered questions count as zero.
-  - Exams leave locked tiers out, say on their first page what opens them, and offer **Include locked tiers** while the gate is advisory (the default).
+- **Tier gates** (#26). The Progression settings now do what they say:
+  - A quiz's Hard questions are asked once you own 80% of its Easy questions,
+    and its Brutal questions once you own 80% of its Hard ones. Unanswered
+    questions count as zero.
+  - Exams leave locked tiers out and say on their first page what opens them.
+    While the gate is advisory (the default), they offer **Include locked
+    tiers**.
   - Reviews bring in new questions only from open tiers.
-  - The course view marks quizzes with locked tiers with a padlock.
-  - The results page announces each tier a session opens.
+  - In the course view, quizzes with locked tiers show a padlock.
+  - The results page names each tier a session opens.
+- **Highlights reach the daily review sooner.** Questions made from your
+  `==highlights==` come in as soon as you write them, without waiting for the
+  note to be completed or examined.
+
+### Changed
+
+- **Much faster screens.** The review schedule is kept and extended instead of
+  being replayed from the whole answer history on every screen. The streak
+  resumes from the days already saved.
+  - With a year of answers (about 11,000), an overview redraw drops from about
+    0.7 s to about 35 ms.
+  - The first draw after starting Obsidian takes about 0.25 s.
+- attempts.json and the log are written through `Vault.process`, so a sync
+  cannot slip a change in between a read and a write.
+- The command **Open Recall Lab** is now **Open view**: the palette already
+  shows "Recall Lab:" before it. The setting **Path to the claude binary** is
+  now **Path to the Claude binary**.
+- The plugin's author is Muhammad Younas, with [r00tlv.me](https://r00tlv.me)
+  as the author's site in the manifest.
+- Builds use esbuild 0.28 (#20). `builtin-modules` is gone, replaced by
+  Node's own list.
 
 ### Removed
 
@@ -22,8 +51,21 @@ release workflow publishes a version's section below as its release notes.
 ### Documentation
 
 - A shorter README, with screenshots of the plugin and a diagram of how it
-  works. The full reference moved to `docs/`: a user guide, the question bank
-  format, and development and release notes.
+  works (#25). The full reference moved to `docs/`: a user guide, the
+  question bank format, and development and release notes.
+- The README now discloses what Obsidian's developer policies ask for: the
+  Claude account and plan, network use, the programs Recall Lab starts and
+  the files it writes outside the vault.
+
+### Development
+
+- View tests draw every screen of the real view in jsdom, in CI. They check
+  that each screen draws without an error, and that the screens say the
+  right thing.
+- `scripts/smoke-test.js` opens every screen in a real vault, answering
+  nothing, to check a build before release.
+- The code passes Obsidian's recommended lint rules
+  (`eslint-plugin-obsidianmd`) with no errors.
 
 ## [0.4.0] - 2026-10-19
 
@@ -94,6 +136,6 @@ text, shell commands and image answers), marked instantly or by Claude through
 the Claude Code CLI; CTF-style hands-on labs with hashed flags; a skill radar
 per course; and a full answer history.
 
-[Unreleased]: https://github.com/MYounas126/recall-lab/compare/0.4.0...HEAD
+[0.5.0]: https://github.com/MYounas126/recall-lab/releases/tag/0.5.0
 [0.4.0]: https://github.com/MYounas126/recall-lab/releases/tag/0.4.0
 [0.3.0]: https://github.com/MYounas126/recall-lab/commit/23f4e9a
