@@ -380,7 +380,9 @@ const TIER_ORDER: Record<Tier, number> = { easy: 0, hard: 1, brutal: 2 };
  * ending a session early still covers what matters most. Then new questions,
  * up to the day's allowance, and only from notes marked complete or already
  * examined: never from a note not read yet. Completed notes go first, oldest
- * first, and within a note easy questions come before hard ones.
+ * first, and within a note easy questions come before hard ones. A new
+ * question in a tier its quiz has not opened yet waits; one already answered
+ * stays due, since forgetting it would undo the work.
  */
 export function planReview(p: {
 	items: ExamItem[];
@@ -391,6 +393,8 @@ export function planReview(p: {
 	completed: Record<string, string>;
 	/** The note a bank drills, if it has one. */
 	noteOf: (bankId: string) => string | undefined;
+	/** Whether a question's tier is open; every tier is, if not given. */
+	isOpen?: (item: ExamItem) => boolean;
 }): ReviewPlan {
 	const { items, memory, now } = p;
 	const today = endOfDay(now);
@@ -413,7 +417,7 @@ export function planReview(p: {
 		return started.has(it.bankId) ? Number.MAX_SAFE_INTEGER : null;
 	};
 	const fresh = items
-		.filter((it) => !memory.has(keyOf(it)))
+		.filter((it) => !memory.has(keyOf(it)) && (p.isOpen?.(it) ?? true))
 		.map((it, i) => ({ it, i, r: rank(it) }))
 		.filter((e): e is { it: ExamItem; i: number; r: number } => e.r !== null)
 		.sort((a, b) => a.r - b.r || TIER_ORDER[a.it.q.tier] - TIER_ORDER[b.it.q.tier] || a.i - b.i)

@@ -311,7 +311,9 @@ export class RecallLabSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Mastery needed to unlock Hard")
 			.setDesc(
-				"Percent mastery of the Easy tier. Unanswered questions count as zero, so you have to cover the tier, not just score well on the few you tried."
+				"How much of a quiz's Easy tier you must own before its Hard questions are asked, in exams and as new " +
+					"questions in reviews. Unanswered questions count as zero, so you have to cover the tier, not just " +
+					"score well on the few you tried. 0 opens Hard straight away."
 			)
 			.addSlider((s) =>
 				s
@@ -326,7 +328,7 @@ export class RecallLabSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Mastery needed to unlock Brutal")
-			.setDesc("Percent mastery of the Hard tier.")
+			.setDesc("How much of a quiz's Hard tier you must own before its Brutal questions are asked. 0 opens Brutal as soon as Hard is open.")
 			.addSlider((s) =>
 				s
 					.setLimits(0, 100, 5)
@@ -340,7 +342,10 @@ export class RecallLabSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Allow drilling locked tiers")
-			.setDesc("Keeps the gate advisory rather than binding.")
+			.setDesc(
+				"Keeps the gate advisory: an exam that leaves locked tiers out offers to include them. Off, the gate is " +
+					"binding. Reviews never bring in new questions from a locked tier either way."
+			)
 			.addToggle((t) =>
 				t.setValue(this.plugin.settings.allowOverride).onChange(async (v) => {
 					this.plugin.settings.allowOverride = v;

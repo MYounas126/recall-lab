@@ -193,6 +193,17 @@ test("new questions come only from completed or examined notes, completed first"
 	assert.deepEqual(fresh.slice(1), [qkey("a", "q4"), qkey("a", "q5")], "easy before hard");
 });
 
+test("a new question waits for its tier to open; one already answered stays due", () => {
+	const memory = memoryOf(attempt("a", "q1", 100, ago(30)), attempt("a", "q5", 0, ago(3)));
+	const p = planReview({
+		items: Store.itemsOf(banks), memory, now: NOW, newPerDay: 10,
+		completed: { "C/b.md": ago(5) }, noteOf, isOpen: (it) => it.q.tier === "easy",
+	});
+	assert.ok(p.due.map(keyOf).includes(qkey("a", "q5")), "a locked tier's answered question is still reviewed");
+	assert.ok(p.fresh.every((it) => it.q.tier === "easy"));
+	assert.ok(p.fresh.length > 0);
+});
+
 test("the day's allowance counts new questions already met today", () => {
 	// a/q3 was first answered today, so an allowance of 2 leaves room for 1.
 	assert.equal(plan(2).plan.fresh.length, 1);

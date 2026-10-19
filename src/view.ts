@@ -25,6 +25,7 @@ import { SECOND_TRY_CAP, combineTries } from "./tasks";
 import { blurtExam, missedHeading } from "./blurt";
 import { checkFlag, hashFlag, hintsNeedShortening } from "./labs";
 import { INSTALL_HINT } from "./claude";
+import { Gate, GateRule, gatesOf, isOpen, lockedTiers, opened, tierNames, whyLocked } from "./gates";
 
 // Rough per-quiz figures for the bulk-generation dialog. Illustrative only:
 // they drift with the model, the note's length and plan pricing, which is why
@@ -56,6 +57,18 @@ interface BlurtPage {
 	result: BlurtResult | null;
 }
 
+
+/** What the tier gates did to a session. */
+interface Gating {
+	/** Every question the session could draw on, to tell afterwards which gates opened. */
+	pool: ExamItem[];
+	/** Each quiz's gate when the session began. */
+	before: Map<string, Gate>;
+	/** How many questions were left out because their tier is locked. */
+	left: number;
+	/** Starts the same exam again with locked tiers in; only while the gate is advisory. */
+	includeLocked: (() => Promise<void>) | null;
+}
 
 interface LiveAnswer {
 	q: Question;
@@ -89,6 +102,8 @@ export class RecallLabView extends ItemView {
 	private examItems: ExamItem[] = [];
 	/** A review is spaced practice: it stays offline unless you ask for feedback. */
 	private sessionKind: "exam" | "review" = "exam";
+	/** What the tier gates left out of the session, and where they stood when it began. */
+	private gating: Gating | null = null;
 	/** Sessions whose on-demand feedback has been asked for and not yet landed. */
 	private coachingInFlight = new Set<string>();
 	/** The leech clinic's question on screen, by key. */
@@ -454,11 +469,16 @@ export class RecallLabView extends ItemView {
 	}
 
 	/** Today's review over these banks, with every question's memory state. */
-	private async planFor(banks: Bank[]): Promise<{ plan: ReviewPlan; memory: Memory; keys: Set<string>; progress: ProgressFile }> {
+	private async planFor(banks: Bank[]): Promise<{
+		plan: ReviewPlan; memory: Memory; keys: Set<string>; progress: ProgressFile; items: ExamItem[]; gates: Map<string, Gate>;
+	}> {
 		const progress = await this.plugin.store.readProgress();
 		const memory = new Memory(progress.attempts, this.plugin.settings.targetRecall / 100);
 		const noteOf = new Map(this.everyBank.map((b) => [b.id, b.note]));
 		const items = Store.itemsOf(banks);
+		// New questions wait for their tier to open, advisory gate or not: a
+		// review is not a choice to drill a locked tier.
+		const gates = gatesOf(items, new AnswerIndex(progress.attempts), this.gateRule());
 		const plan = planReview({
 			items,
 			memory,
@@ -466,8 +486,9 @@ export class RecallLabView extends ItemView {
 			newPerDay: this.plugin.settings.newPerDay,
 			completed: progress.completed ?? {},
 			noteOf: (id) => noteOf.get(id),
+			isOpen: (it) => isOpen(it, gates),
 		});
-		return { plan, memory, keys: keysOf(items), progress };
+		return { plan, memory, keys: keysOf(items), progress, items, gates };
 	}
 
 	/** What is due today, and the button that starts the review. */
@@ -650,11 +671,13 @@ export class RecallLabView extends ItemView {
 	}
 
 	/** The note's quiz with the sections you left out asked first. */
-	private async beginBlurtExam(bank: Bank, r: BlurtResult): Promise<void> {
+	private async beginBlurtExam(bank: Bank, r: BlurtResult, includeLocked = false): Promise<void> {
 		const progress = await this.plugin.store.readProgress();
+		const index = new AnswerIndex(progress.attempts);
 		const items = Store.itemsOf([bank, ...this.highlightBanks.filter((b) => b.note === bank.note)]);
-		const total = Math.min(this.plugin.settings.defaultLength, items.length);
-		await this.launch(bank, blurtExam(items, new AnswerIndex(progress.attempts), total, r.missed.map(missedHeading)));
+		const { open, gating } = this.gate(items, index, includeLocked, () => this.beginBlurtExam(bank, r, true));
+		const total = Math.min(this.plugin.settings.defaultLength, open.length);
+		await this.launch(bank, blurtExam(open, index, total, r.missed.map(missedHeading)), "exam", gating);
 	}
 
 	/** Recent write-it-down checks: how much of each note came back from memory. */
@@ -1055,7 +1078,7 @@ export class RecallLabView extends ItemView {
 	}
 
 	private async review(banks: Bank[], id: string, title: string, dueOnly = false): Promise<void> {
-		const { plan, memory, keys, progress } = await this.planFor(banks);
+		const { plan, memory, keys, progress, items: pool, gates } = await this.planFor(banks);
 		// A mature question comes back as its next variant, if it has any.
 		const items = withVariants(dueOnly ? plan.due : [...plan.due, ...plan.fresh], new AnswerIndex(progress.attempts));
 		if (!items.length) {
@@ -1064,7 +1087,8 @@ export class RecallLabView extends ItemView {
 			new Notice(next ? `Nothing to review. The next question is due ${describeWhen(next, now)}.` : "Nothing to review yet.");
 			return;
 		}
-		await this.launch({ id, title, questions: [] }, items, "review");
+		// Nothing is left out of a review by hand, but its answers can open a tier.
+		await this.launch({ id, title, questions: [] }, items, "review", { pool, before: gates, left: 0, includeLocked: null });
 	}
 
 	private renderLegend(panel: HTMLElement, scores: AxisScore[], onClick?: (id: string) => void): void {
@@ -1135,6 +1159,7 @@ export class RecallLabView extends ItemView {
 		}
 
 		const courseBanks = Store.banksForCourse(course, this.banks);
+		const gates = gatesOf(Store.itemsOf(courseBanks), new AnswerIndex(progress.attempts), this.gateRule());
 		const expected = this.expectedScores(progress.attempts);
 		const scores = withBefore(
 			scoreAxes(course, courseBanks, expected.now),
@@ -1177,11 +1202,24 @@ export class RecallLabView extends ItemView {
 		const allQ = courseBanks.reduce((n, b) => n + b.questions.length, 0);
 		const highlighted = this.highlightsIn(folder).reduce((n, b) => n + b.questions.length, 0);
 		examPanel.createDiv({ cls: "rl-muted", text: `One paper that ramps from recall to application to synthesis, drawn across all ${courseBanks.length} quiz${courseBanks.length === 1 ? "" : "zes"} (${allQ} questions${highlighted ? `, and ${highlighted} from your highlights` : ""}).` });
+		const anyLocked = [...gates.values()].some((g) => lockedTiers(g).length);
+		if (anyLocked) {
+			const rule = this.gateRule();
+			const quizzes = (n: number) => `${n} quiz${n === 1 ? "" : "zes"}`;
+			const withTier = (t: Tier) => [...gates.values()].filter((g) => g.mastery[t] !== null);
+			const openIn = (t: Tier) => withTier(t).filter((g) => g.open[t]).length;
+			examPanel.createDiv({
+				cls: "rl-muted",
+				text: `Locked tiers are left out. A quiz opens Hard once you own ${rule.hard}% of its Easy questions, ` +
+					`and Brutal once you own ${rule.brutal}% of its Hard ones. Hard is open in ${openIn("hard")} of ` +
+					`${quizzes(withTier("hard").length)}, Brutal in ${openIn("brutal")} of ${quizzes(withTier("brutal").length)}.`,
+			});
+		}
 		const ea = examPanel.createDiv({ cls: "rl-actions" });
 		if (courseBanks.length) {
 			new ButtonComponent(ea).setButtonText(`Start exam (${this.plugin.settings.defaultLength})`).setCta()
 				.onClick(() => void this.beginCourseExam(course, courseBanks, this.plugin.settings.defaultLength));
-			new ButtonComponent(ea).setButtonText("Full exam (everything)")
+			new ButtonComponent(ea).setButtonText(anyLocked ? "Full exam (every open tier)" : "Full exam (everything)")
 				.onClick(() => void this.beginCourseExam(course, courseBanks, "all"));
 		} else {
 			examPanel.createDiv({ cls: "rl-muted", text: "No quizzes yet — generate one from a note below." });
@@ -1211,7 +1249,7 @@ export class RecallLabView extends ItemView {
 		}
 
 		this.renderLabPanel(main, folder, progress);
-		this.renderNoteList(main, folder, courseBanks, progress, true);
+		this.renderNoteList(main, folder, courseBanks, progress, true, gates);
 	}
 
 	/** All of a course's labs in one place, with their state. */
@@ -1266,7 +1304,8 @@ export class RecallLabView extends ItemView {
 	}
 
 	private renderNoteList(
-		main: HTMLElement, folder: string, courseBanks: Bank[], progress: { completed?: Record<string, string> }, isCourse: boolean
+		main: HTMLElement, folder: string, courseBanks: Bank[], progress: { completed?: Record<string, string> }, isCourse: boolean,
+		gates?: Map<string, Gate>
 	): void {
 		const notes = this.plugin.store.notesIn(folder);
 		const panel = main.createDiv({ cls: "rl-panel" });
@@ -1319,7 +1358,16 @@ export class RecallLabView extends ItemView {
 				.setTooltip("Teach this note back to a curious beginner (uses Claude)")
 				.onClick(() => void this.startTeachBack(path));
 			if (bank) {
-				right.createSpan({ cls: "rl-chip", text: `${bank.questions.length} q` });
+				const chip = right.createSpan({ cls: "rl-chip", text: `${bank.questions.length} q` });
+				const gate = gates?.get(bank.id);
+				const why = gate ? whyLocked(gate, this.gateRule()) : null;
+				if (why) {
+					chip.addClass("rl-chip-locked");
+					const icon = chip.createSpan({ cls: "rl-chip-icon" });
+					setIcon(icon, "lock");
+					chip.prepend(icon);
+					chip.setAttr("aria-label", why);
+				}
 				new ButtonComponent(right).setButtonText("Exam").setCta()
 					.onClick(() => void this.beginExam(bank, false));
 				if (!this.allLabs.some((l) => l.note === path)) {
@@ -1370,8 +1418,26 @@ export class RecallLabView extends ItemView {
 
 	// ================================================================ exam
 
-	private async beginCourseExam(course: Course, banks: Bank[], total: number | "all"): Promise<void> {
+	private gateRule(): GateRule {
+		return { hard: this.plugin.settings.unlockHard, brutal: this.plugin.settings.unlockBrutal };
+	}
+
+	/**
+	 * The questions an exam may ask: those in tiers their quiz has opened,
+	 * unless you chose to include locked ones. `again` starts the same exam
+	 * with them in, which the exam offers while the gate is advisory.
+	 */
+	private gate(items: ExamItem[], index: AnswerIndex, includeLocked: boolean, again: () => Promise<void>): { open: ExamItem[]; gating: Gating } {
+		const before = gatesOf(items, index, this.gateRule());
+		const open = includeLocked ? items : items.filter((it) => isOpen(it, before));
+		const left = items.length - open.length;
+		const advisory = left > 0 && this.plugin.settings.allowOverride;
+		return { open, gating: { pool: items, before, left, includeLocked: advisory ? again : null } };
+	}
+
+	private async beginCourseExam(course: Course, banks: Bank[], total: number | "all", includeLocked = false): Promise<void> {
 		const progress = await this.plugin.store.readProgress();
+		const index = new AnswerIndex(progress.attempts);
 		// One virtual paper across the course. Each question keeps its own bank,
 		// so its answer is recorded against that bank, not the paper.
 		const merged: Bank = {
@@ -1381,22 +1447,25 @@ export class RecallLabView extends ItemView {
 			questions: [],
 		};
 		const items = Store.itemsOf([...banks, ...this.highlightsIn(course.folder)]);
-		const picked = total === "all" || total >= items.length
-			? Store.fullExam(items)
-			: Store.pickExam(items, new AnswerIndex(progress.attempts), total);
-		await this.launch(merged, picked);
+		const { open, gating } = this.gate(items, index, includeLocked, () => this.beginCourseExam(course, banks, total, true));
+		const picked = total === "all" || total >= open.length
+			? Store.fullExam(open)
+			: Store.pickExam(open, index, total);
+		await this.launch(merged, picked, "exam", gating);
 	}
 
-	private async beginExam(bank: Bank, full: boolean): Promise<void> {
+	private async beginExam(bank: Bank, full: boolean, includeLocked = false): Promise<void> {
 		const progress = await this.plugin.store.readProgress();
+		const index = new AnswerIndex(progress.attempts);
 		const items = Store.itemsOf([bank, ...this.highlightBanks.filter((b) => b.note && b.note === bank.note)]);
+		const { open, gating } = this.gate(items, index, includeLocked, () => this.beginExam(bank, full, true));
 		const picked = full
-			? Store.fullExam(items)
-			: Store.pickExam(items, new AnswerIndex(progress.attempts), Math.min(this.plugin.settings.defaultLength, items.length));
-		await this.launch(bank, picked);
+			? Store.fullExam(open)
+			: Store.pickExam(open, index, Math.min(this.plugin.settings.defaultLength, open.length));
+		await this.launch(bank, picked, "exam", gating);
 	}
 
-	private async launch(bank: Bank, picked: ExamItem[], kind: "exam" | "review" = "exam"): Promise<void> {
+	private async launch(bank: Bank, picked: ExamItem[], kind: "exam" | "review" = "exam", gating: Gating | null = null): Promise<void> {
 		if (!picked.length) { new Notice("Recall Lab: that quiz has no questions."); return; }
 		// A second try left open on the last exam keeps its first answer.
 		this.settleSecondTry?.();
@@ -1409,6 +1478,7 @@ export class RecallLabView extends ItemView {
 		this.bank = bank;
 		this.examItems = picked;
 		this.sessionKind = kind;
+		this.gating = gating;
 		this.recallStage = null;
 		this.guideStage = null;
 		this.index = 0;
@@ -1418,6 +1488,60 @@ export class RecallLabView extends ItemView {
 		this.revealed = false;
 		this.questionStart = Date.now();
 		await this.render();
+	}
+
+	/** The one quiz a session draws on, besides its highlights; null for a paper across several. */
+	private soleQuiz(g: Gating): string | null {
+		const highlights = new Set(this.highlightBanks.map((b) => b.id));
+		const ids = new Set(g.pool.map((it) => it.bankId).filter((id) => !highlights.has(id)));
+		return ids.size === 1 ? [...ids][0] : null;
+	}
+
+	/** Why the exam leaves some tiers out, and, while the gate is advisory, the way to bring them in. */
+	private renderGateNote(parent: HTMLElement, g: Gating): void {
+		const rule = this.gateRule();
+		const quiz = this.soleQuiz(g);
+		const gate = quiz ? g.before.get(quiz) : undefined;
+		const note = parent.createDiv({ cls: "rl-gate-note" });
+		setIcon(note.createSpan({ cls: "rl-gate-icon" }), "lock");
+		note.createDiv({
+			cls: "rl-gate-text",
+			text: (gate && whyLocked(gate, rule)) ||
+				`${g.left} question${g.left === 1 ? " is" : "s are"} left out because ${g.left === 1 ? "its tier is" : "their tiers are"} locked. ` +
+				`A quiz opens Hard once you own ${rule.hard}% of its Easy questions, and Brutal once you own ${rule.brutal}% of its Hard ones.`,
+		});
+		const again = g.includeLocked;
+		if (again) {
+			new ButtonComponent(note).setButtonText("Include locked tiers")
+				.setTooltip("Start this exam again with every tier in it")
+				.onClick(() => void again());
+		}
+	}
+
+	/** Tiers the session opened; after a one-quiz exam that opened none, what the next needs. */
+	private renderGateNews(main: HTMLElement, attempts: Attempt[]): void {
+		const g = this.gating;
+		if (!g) return;
+		const rule = this.gateRule();
+		const after = gatesOf(g.pool, new AnswerIndex(attempts), rule);
+		const lines: { icon: string; text: string }[] = [];
+		for (const [id, tiers] of opened(g.before, after)) {
+			const name = this.everyBank.find((b) => b.id === id)?.title ?? id;
+			lines.push({ icon: "unlock", text: `${tierNames(tiers)} ${tiers.length > 1 ? "are" : "is"} now open in ${name}.` });
+		}
+		const quiz = this.soleQuiz(g);
+		const now = quiz ? after.get(quiz) : undefined;
+		if (!lines.length && now && this.sessionKind === "exam") {
+			const why = whyLocked(now, rule, g.before.get(quiz!));
+			if (why) lines.push({ icon: "lock", text: why });
+		}
+		if (!lines.length) return;
+		const panel = main.createDiv({ cls: "rl-panel rl-gate-news" });
+		for (const line of lines.slice(0, 6)) {
+			const row = panel.createDiv({ cls: "rl-gate-row" });
+			setIcon(row.createSpan({ cls: "rl-gate-icon" }), line.icon);
+			row.createSpan({ text: line.text });
+		}
 	}
 
 	private async renderExam(root: HTMLElement): Promise<void> {
@@ -1455,6 +1579,8 @@ export class RecallLabView extends ItemView {
 		quit.onclick = (e) => { e.preventDefault(); void this.finish(); };
 		const track = bar.createDiv({ cls: "rl-progress rl-progress-slim" });
 		track.createDiv({ cls: "rl-progress-fill" }).setCssProps({ "--rl-fill": `${(this.index / this.examItems.length) * 100}%` });
+		// Said once, before the first answer: what the paper leaves out, and why.
+		if (this.gating?.left && this.index === 0 && !this.answers.length) this.renderGateNote(wrap, this.gating);
 
 		const card = wrap.createDiv({ cls: "rl-question" });
 		const meta = card.createDiv({ cls: "rl-qmeta" });
@@ -2230,6 +2356,7 @@ export class RecallLabView extends ItemView {
 				` · ${tomorrow} due for review tomorrow`,
 		});
 
+		this.renderGateNews(main, progress.attempts);
 		this.renderCoaching(main, session);
 
 		// Mistakes made with confidence get their own list: once corrected they

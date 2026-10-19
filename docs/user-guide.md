@@ -45,6 +45,19 @@ There are three tiers:
 
 An exam doesn't make you pick a tier. It ramps through all three: about 45% easy, then 35% hard, then 20% brutal. If a tier doesn't have enough questions, the shortfall goes to the next tier up.
 
+**Tiers unlock as you go.** Each quiz opens its tiers on its own:
+
+- **Hard** opens once you own 80% of the quiz's Easy questions.
+- **Brutal** opens once you own 80% of its Hard questions.
+
+To work out how much of a tier you own, Recall Lab averages each question's last three scores. A question you haven't answered counts as zero. So a tier opens when you have covered it, not when you have aced the few questions you tried.
+
+You can change both thresholds under **Settings → Progression**. Setting one to 0 turns that gate off.
+
+Until a tier opens, exams leave it out and fill the paper from the open tiers. The first page of the exam says what is locked and how far you are from opening it. When an exam opens a tier, the results page tells you.
+
+**Include locked tiers** on that first page starts the same exam again with every tier in it. It appears only while **Allow drilling locked tiers** is on. In the course view, a padlock on a quiz's question count shows that it has locked tiers; hover over it to see why.
+
 Within each tier, questions you haven't seen come first, then your weakest, then the ones you haven't seen for the longest. That way, a repeat exam isn't the same paper. An exam asks up to 15 questions; **Default session length** changes this.
 
 | Question type | What you do | Marked by |
@@ -110,7 +123,7 @@ You can start a review in two ways:
 - **Today's review** on the overview;
 - the **Start today's review** command.
 
-A review asks what is due across every course, closest to forgotten first. Then it adds new questions, up to your daily allowance. New questions only come from notes you have marked complete or already taken an exam on. Each course also has its own review.
+A review asks what is due across every course, closest to forgotten first. Then it adds new questions, up to your daily allowance. New questions only come from notes you have marked complete or already taken an exam on, and only from tiers their quiz has opened. A question you have already answered stays in your reviews, even if its tier is locked. Each course also has its own review.
 
 A miss brings a question back the next day, and each correct answer pushes it further out. Answers are saved as you go, so you can stop at any point.
 
@@ -253,10 +266,11 @@ To find these, open **Settings → Recall Lab**.
 | Daily review | Target recall | 90% | Higher means more frequent reviews. Ranges from 70% to 97%. |
 | Daily review | New questions per day | 20 | Ranges from 0 to 100. |
 | Daily review | Memory map on notes | On | Turns the heading dots, note footers and status bar on or off. |
+| Progression | Mastery needed to unlock Hard | 80% | How much of a quiz's Easy tier you must own before its Hard questions are asked. 0 opens Hard straight away. |
+| Progression | Mastery needed to unlock Brutal | 80% | How much of a quiz's Hard tier you must own before its Brutal questions are asked. |
+| Progression | Allow drilling locked tiers | On | An exam that leaves locked tiers out offers to include them. Off, the gate is binding. |
 | Progression | Default session length | 15 | Questions per exam, from 5 to 50. |
 | Folders | Banks, Courses, Progress | `_quiz/banks`, `_quiz/courses`, `_quiz/progress` | Where Recall Lab keeps its files. |
-
-The **Progression** section also has *Mastery needed to unlock Hard*, *Mastery needed to unlock Brutal* and *Allow drilling locked tiers*. These are reserved for tier gating, which isn't enforced yet. Exams always ramp through all three tiers.
 
 ## Files
 

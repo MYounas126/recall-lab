@@ -434,8 +434,11 @@
 .rl-note-actions { display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0; }
 /* Chips in a row are centred on it, never squeezed or wrapped. */
 .rl-note-row .rl-chip { margin: 0; flex-shrink: 0; }
-/* The question count has a fixed width, so the buttons line up from row to row. */
-.rl-note-actions .rl-chip { min-width: 3.6em; text-align: center; font-variant-numeric: tabular-nums; }
+/* The question count has a fixed width, so the buttons line up from row to row, padlock or not. */
+.rl-note-actions .rl-chip { min-width: 4.6em; text-align: center; font-variant-numeric: tabular-nums; }
+/* A quiz with locked tiers wears a padlock; its tooltip says what opens them. */
+.rl-chip-icon { display: inline-flex; vertical-align: -0.12em; margin-right: 0.2rem; }
+.rl-chip-icon svg { width: 0.9em; height: 0.9em; }
 .rl-note-group {
 	margin: 1rem 0 0.1rem; padding-bottom: 0.2rem;
 	font-size: var(--font-ui-smaller); font-weight: 600; color: var(--text-muted);
@@ -716,3 +719,19 @@
 /* Under the flag box: wrong flags so far, then each new verdict. */
 .rl-flag-verdict { margin-top: 0.4rem; }
 .rl-flag-right { color: var(--color-green); font-size: var(--font-ui-smaller); }
+
+/* ---------- tier gates ---------- */
+
+/* Before an exam's first answer: which tiers it leaves out, and why. */
+.rl-gate-note {
+	display: flex; align-items: center; flex-wrap: wrap; gap: 0.6rem;
+	margin: 0.7rem 0 0.2rem; padding: 0.55rem 0.8rem;
+	border: 1px dashed var(--background-modifier-border); border-radius: 8px;
+	color: var(--text-muted); font-size: var(--font-ui-small);
+}
+.rl-gate-text { flex: 1; min-width: 12rem; }
+.rl-gate-icon { display: inline-flex; flex-shrink: 0; color: var(--text-muted); }
+.rl-gate-icon svg { width: 1em; height: 1em; }
+/* On the results page: the tiers a session opened, or what the next one needs. */
+.rl-gate-row { display: flex; align-items: center; gap: 0.5rem; }
+.rl-gate-row + .rl-gate-row { margin-top: 0.35rem; }
