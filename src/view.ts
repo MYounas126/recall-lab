@@ -26,6 +26,7 @@ import { blurtExam, missedHeading } from "./blurt";
 import { checkFlag, hashFlag, hintsNeedShortening } from "./labs";
 import { INSTALL_HINT } from "./claude";
 import { Gate, GateRule, gatesOf, isOpen, lockedTiers, opened, tierNames, whyLocked } from "./gates";
+import { isHighlightBank } from "./highlights";
 
 // Rough per-quiz figures for the bulk-generation dialog. Illustrative only:
 // they drift with the model, the note's length and plan pricing, which is why
@@ -487,6 +488,7 @@ export class RecallLabView extends ItemView {
 			completed: progress.completed ?? {},
 			noteOf: (id) => noteOf.get(id),
 			isOpen: (it) => isOpen(it, gates),
+			isHighlights: isHighlightBank,
 		});
 		return { plan, memory, keys: keysOf(items), progress, items, gates };
 	}

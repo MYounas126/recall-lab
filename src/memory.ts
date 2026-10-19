@@ -540,8 +540,11 @@ const TIER_ORDER: Record<Tier, number> = { easy: 0, hard: 1, brutal: 2 };
  * Today's review. Everything due today comes first, most at risk first, so
  * ending a session early still covers what matters most. Then new questions,
  * up to the day's allowance, and only from notes marked complete or already
- * examined: never from a note not read yet. Completed notes go first, oldest
- * first, and within a note easy questions come before hard ones. A new
+ * examined: never from a note not read yet. Your own highlights are the
+ * exception: highlighting a sentence says you have read it and want it
+ * remembered, so its question can come in at once, after the notes you
+ * completed or examined. Completed notes go first, oldest first, and within
+ * a note easy questions come before hard ones. A new
  * question in a tier its quiz has not opened yet waits; one already answered
  * stays due, since forgetting it would undo the work.
  */
@@ -556,6 +559,8 @@ export function planReview(p: {
 	noteOf: (bankId: string) => string | undefined;
 	/** Whether a question's tier is open; every tier is, if not given. */
 	isOpen?: (item: ExamItem) => boolean;
+	/** Whether a bank holds your highlights, which may come in before their note is completed. */
+	isHighlights?: (bankId: string) => boolean;
 }): ReviewPlan {
 	const { items, memory, now } = p;
 	const today = endOfDay(now);
@@ -575,7 +580,9 @@ export function planReview(p: {
 			const t = Date.parse(done);
 			return Number.isNaN(t) ? 0 : t;
 		}
-		return started.has(it.bankId) ? Number.MAX_SAFE_INTEGER : null;
+		if (started.has(it.bankId)) return Number.MAX_SAFE_INTEGER;
+		// After everything above, but never held back.
+		return p.isHighlights?.(it.bankId) ? Number.MAX_VALUE : null;
 	};
 	const fresh = items
 		.filter((it) => !memory.has(keyOf(it)) && (p.isOpen?.(it) ?? true))

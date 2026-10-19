@@ -193,6 +193,21 @@ test("new questions come only from completed or examined notes, completed first"
 	assert.deepEqual(fresh.slice(1), [qkey("a", "q4"), qkey("a", "q5")], "easy before hard");
 });
 
+test("your highlights come in before their note is completed, after the notes you completed or examined", () => {
+	const highlights: Bank = { id: "hl:C/c.md", title: "C highlights", note: "C/c.md", questions: [question("h1", { type: "cloze" }), question("h2", { type: "cloze" })] };
+	const all = [...banks, highlights];
+	const memory = memoryOf(attempt("a", "q1", 100, ago(30)), attempt("a", "q2", 0, ago(3)));
+	const p = planReview({
+		items: Store.itemsOf(all), memory, now: NOW, newPerDay: 20,
+		completed: { "C/b.md": ago(5) }, noteOf: (id) => all.find((b) => b.id === id)?.note,
+		isHighlights: (id) => id.startsWith("hl:"),
+	});
+	assert.deepEqual(p.fresh.map(keyOf), [
+		qkey("b", "q1"), qkey("a", "q3"), qkey("a", "q4"), qkey("a", "q5"), qkey("hl:C/c.md", "h1"), qkey("hl:C/c.md", "h2"),
+	]);
+	assert.ok(!p.fresh.some((it) => it.bankId === "c"), "the unread note's own quiz still waits");
+});
+
 test("a new question waits for its tier to open; one already answered stays due", () => {
 	const memory = memoryOf(attempt("a", "q1", 100, ago(30)), attempt("a", "q5", 0, ago(3)));
 	const p = planReview({

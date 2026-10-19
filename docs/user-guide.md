@@ -31,7 +31,7 @@ To build a quiz again from the current note, press the rebuild icon next to the 
 
 Builds run one at a time. Anything you ask for during a build waits in a queue, and the same note is never built twice.
 
-**Fill in your highlights.** Each sentence in a course note that has `==highlighted==` text becomes a fill-in-the-blank question. These are made on your device; Claude is not involved. They join the note's exams and your reviews. A question keeps its history until you edit its sentence, and renaming or moving the note doesn't lose it. Highlights are skipped when they are inside code or a table row, or when their sentence contains `{`, `}` or `|`.
+**Fill in your highlights.** Each sentence in a course note that has `==highlighted==` text becomes a fill-in-the-blank question. These are made on your device; Claude is not involved. They join the note's exams. They also join your daily review as soon as you write them, without waiting for you to complete the note. A question keeps its history until you edit its sentence, and renaming or moving the note doesn't lose it. Highlights are skipped when they are inside code or a table row, or when their sentence contains `{`, `}` or `|`.
 
 **Remove leftovers.** Quizzes and labs are tied to their note by its path, and courses to their folder. After you delete or rename notes, run **Remove leftover quizzes, labs and courses**. It lists everything whose note or folder is gone and, once you confirm, moves it to the trash. Your answer history is kept.
 
@@ -123,7 +123,7 @@ You can start a review in two ways:
 - **Today's review** on the overview;
 - the **Start today's review** command.
 
-A review asks what is due across every course, closest to forgotten first. Then it adds new questions, up to your daily allowance. New questions only come from notes you have marked complete or already taken an exam on, and only from tiers their quiz has opened. A question you have already answered stays in your reviews, even if its tier is locked. Each course also has its own review.
+A review asks what is due across every course, closest to forgotten first. Then it adds new questions, up to your daily allowance. New questions only come from notes you have marked complete or already taken an exam on, and only from tiers their quiz has opened. Questions made from your highlights are the exception: they can come in as soon as you write them, after the new questions from notes you have completed or examined. A question you have already answered stays in your reviews, even if its tier is locked. Each course also has its own review.
 
 A miss brings a question back the next day, and each correct answer pushes it further out. Answers are saved as you go, so you can stop at any point.
 
