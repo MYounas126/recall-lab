@@ -14,7 +14,7 @@ npm install
 |---|---|
 | `npm run dev` | Rebuilds `main.js` on every change. |
 | `npm run build` | Type-checks, then makes a minified production `main.js`. |
-| `npm test` | Runs the unit tests under Node, with a stand-in for Obsidian. |
+| `npm test` | Runs every test under Node, including the view tests, with a stand-in for Obsidian. |
 | `npm run check` | Checks that `manifest.json`, `package.json` and `versions.json` agree. |
 
 To try a build in Obsidian:
@@ -35,10 +35,28 @@ To try a build in Obsidian:
 | `src/radar.ts`, `src/notemap.ts` | The skill radar, and the memory dots on headings. |
 | `src/gates.ts` | The tier gates: which tiers of a quiz are open. |
 | `src/labs.ts`, `highlights.ts`, `blurt.ts`, `teach.ts`, `leeches.ts`, `variants.ts`, `guided.ts`, `recall.ts` | One feature each. |
-| `test/` | Unit tests (see below). |
-| `scripts/` | Release helpers: `check-release.mjs`, `release-notes.mjs` and `version-bump.mjs`. |
+| `test/` | Tests (see [Testing](#testing)). |
+| `scripts/` | Release helpers (`check-release.mjs`, `release-notes.mjs`, `version-bump.mjs`) and the vault smoke test (`smoke-test.js`). |
 
-`test/run.mjs` bundles each test with esbuild, using `test/obsidian-shim.ts` in place of the `obsidian` module. It then runs the bundle with Node's built-in test runner.
+## Testing
+
+`npm test` runs two kinds of test with Node's built-in test runner:
+
+- **Logic tests** cover the schedule, tier gates, marking, quiz checks and the vault files. They run against an in-memory vault.
+- **View tests** (`test/view.test.ts`) draw the real Recall Lab view in [jsdom](https://github.com/jsdom/jsdom), over the same in-memory vault. Every screen must draw without an error. The tests then check what the screens say, for example that an exam leaves locked tiers out and that the results page names a tier that has just opened. `test/dom.ts` gives jsdom the helpers Obsidian adds to every element, such as `createDiv` and `setText`.
+
+`test/run.mjs` bundles each test with esbuild, using `test/obsidian-shim.ts` in place of the `obsidian` module.
+
+**Before a release**, try the build in a real vault:
+
+1. Copy `main.js`, `manifest.json` and `styles.css` into the vault's plugin folder, then reload Obsidian.
+2. In the developer console, run the smoke test:
+
+   ```js
+   await require("/path/to/recall-lab/scripts/smoke-test.js")(app)
+   ```
+
+It opens the overview, History, every course, an exam, a lab and today's review, and reports any screen that fails to draw. It answers nothing and never calls Claude.
 
 ## CI/CD
 
