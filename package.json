@@ -24,6 +24,7 @@
     "type": "git",
     "url": "git+https://github.com/MYounas126/recall-lab.git"
   },
+  "author": "Muhammad Younas (https://r00tlv.me)",
   "license": "MIT",
   "engines": {
     "node": ">=20"
