@@ -2,7 +2,7 @@
 
 ## Set up
 
-You need Node.js 20 or later.
+You need Node.js 22 or later.
 
 ```bash
 git clone https://github.com/MYounas126/recall-lab.git
@@ -62,7 +62,7 @@ It opens the overview, History, every course, an exam, a lab and today's review,
 
 ```mermaid
 flowchart LR
-    PR["Pull request"] --> CI["CI on Node 20 and 22: type-check, test, build, plus a dependency audit"]
+    PR["Pull request"] --> CI["CI on Node 22 and 24: type-check, test, build, plus a dependency audit"]
     PR --> CR["Claude review, except drafts and bots"]
     CI --> M["Merge to main"]
     CR --> M
@@ -79,7 +79,7 @@ flowchart LR
 | [`claude.yml`](../.github/workflows/claude.yml) | `@claude` in an issue or review comment | Claude answers or helps with the change. |
 | [Dependabot](../.github/dependabot.yml) | Weekly, on Mondays | Opens pull requests for build tooling and for the workflows' actions. |
 
-**CI** runs on Node 20 and 22:
+**CI** runs on Node 22 and 24:
 
 1. Installs exactly the versions in `package-lock.json`.
 2. Type-checks, runs the tests and makes the production build.

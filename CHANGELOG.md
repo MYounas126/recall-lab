@@ -4,6 +4,15 @@ Every release of Recall Lab. Versions follow the plugin's manifest, and each
 release is tagged with the bare version (`0.4.0`), as Obsidian expects. The
 release workflow publishes a version's section below as its release notes.
 
+## [Unreleased]
+
+### Development
+
+- CI runs on Node 22 and 24, and releases build on Node 22. Node 20 reached
+  end of life on 30 April 2026. This lets the view tests move to jsdom 30.
+- Node's type definitions stay on version 22, and Dependabot no longer offers
+  new majors of them.
+
 ## [0.5.1] - 2026-10-19
 
 Fixes what Obsidian's community directory flagged in its review of 0.5.0.
@@ -166,6 +175,7 @@ text, shell commands and image answers), marked instantly or by Claude through
 the Claude Code CLI; CTF-style hands-on labs with hashed flags; a skill radar
 per course; and a full answer history.
 
+[Unreleased]: https://github.com/MYounas126/recall-lab/compare/0.5.1...HEAD
 [0.5.1]: https://github.com/MYounas126/recall-lab/releases/tag/0.5.1
 [0.5.0]: https://github.com/MYounas126/recall-lab/releases/tag/0.5.0
 [0.4.0]: https://github.com/MYounas126/recall-lab/releases/tag/0.4.0

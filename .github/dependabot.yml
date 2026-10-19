@@ -18,6 +18,10 @@ updates:
       # version is a change to review on its own, with the tests that pin it.
       - dependency-name: ts-fsrs
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      # Node's types stay on the oldest Node the project builds with (22).
+      # Newer majors describe APIs that Obsidian's Electron may not have.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
