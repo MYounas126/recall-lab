@@ -1,340 +1,147 @@
-# Recall Lab
+<h1 align="center">Recall Lab</h1>
 
-[![CI](https://github.com/MYounas126/recall-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/MYounas126/recall-lab/actions/workflows/ci.yml)
-[![Release](https://github.com/MYounas126/recall-lab/actions/workflows/release.yml/badge.svg)](https://github.com/MYounas126/recall-lab/releases)
+<p align="center"><b>Turn your Obsidian notes into long-term memory.</b></p>
 
-An Obsidian plugin that turns your notes into long-term memory: tiered, graded
-exams over your own notes — multiple choice, select-all, free text, shell
-commands, image answers and hands-on question types — a spaced-repetition
-daily review, CTF-style labs, a skill radar per course, and a full answer
-history.
+<p align="center">
+Spaced-repetition reviews, tiered exams, CTF-style labs and a skill radar over your own notes.<br>
+Claude writes them and marks open answers through the Claude Code CLI, so you don't need an API key.
+</p>
 
-- **Daily review** run by FSRS, the questions you are closest to forgetting first.
-- **Memory on the notes**: a dot on each heading, a due count in each note's
-  footer and in the status bar.
-- **More than picking an option**: recall before recognition, click the bug,
-  register traces, ordering, matching, your own highlights as blanks, variants,
-  guided steps, a second try, *write it all down* and *teach it back*.
-- **Labs**: one source file, a hidden flag, and CTF-style hints of a few words.
-- **A leech clinic** for the questions you keep missing.
+<p align="center">
+  <a href="https://github.com/MYounas126/recall-lab/actions/workflows/ci.yml"><img src="https://github.com/MYounas126/recall-lab/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/MYounas126/recall-lab/releases"><img src="https://github.com/MYounas126/recall-lab/actions/workflows/release.yml/badge.svg" alt="Release"></a>
+  <img src="https://img.shields.io/badge/Obsidian-1.5%2B%20desktop-7C3AED?logo=obsidian&logoColor=white" alt="Obsidian 1.5+, desktop">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
+</p>
 
-See [CHANGELOG.md](CHANGELOG.md) for what each release added.
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="docs/user-guide.md">User guide</a> ·
+  <a href="docs/bank-format.md">Question format</a> ·
+  <a href="docs/development.md">Development</a> ·
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
 
-**It holds no API key.** Multiple choice and select-all are marked instantly
-and offline inside the plugin. Everything that needs judgement — marking
-written answers, end-of-exam feedback, and writing quizzes and labs — runs
-through the Claude Code CLI on your own subscription. The plugin calls the CLI
-itself and waits for the reply, so there is nothing for you to type or run.
+<p align="center">
+  <img src="docs/images/overview.png" alt="The Recall Lab overview: today's review with 14 questions due, and a skill radar across three courses" width="900">
+</p>
+
+## Features
+
+- **A daily review** scheduled by [FSRS](https://github.com/open-spaced-repetition/ts-fsrs). The questions you are closest to forgetting come first, then new ones up to a daily limit.
+- **Exams in three tiers**: easy (recall), hard (application) and brutal (synthesis and hands-on). Claude writes them from each note.
+- **More than multiple choice**: written and shell-command answers, click the bug, register traces, ordering and matching. Your own `==highlights==` also become fill-in-the-blank questions.
+- **CTF-style labs**: one source file, a hidden flag, and three hints of a few words each.
+- **Memory on your notes**: a dot on each heading that has questions, plus a due count in each note's footer and in the status bar.
+- **A skill radar** for each course and for the whole vault. Each spoke is the score you could expect on that skill area today.
+- **Help when you are stuck**: a nudge and a second try, guided steps, a leech clinic, *Write it all down* and *Teach it back*.
+
+## A quick tour
+
+### Reviews and exams
+
+Every question has three submit buttons. Picking *Guessing* or *Sure* changes when the question comes back. You can also answer from the keyboard with `1`–`9`, `Enter`, `G` and `S`.
+
+<p align="center"><img src="docs/images/exam.png" alt="A daily-review question with four options and the Guessing, Submit and Sure buttons" width="640"></p>
+
+### Skill radar
+
+Claude names 5–7 skill areas for each course. Each spoke shows the score you could expect on that area today. It counts questions you haven't answered yet as zero, and it fades between reviews.
+
+<p align="center"><img src="docs/images/course-radar.png" alt="A course's skill radar with six skill areas, their scores, and the weakest area called out" width="640"></p>
+
+### Courses
+
+Each note in a course can have a quiz and three labs, plus two exercises led by Claude: *Write it all down* (the pencil) and *Teach it back* (the speech bubble).
+
+<p align="center"><img src="docs/images/course-notes.png" alt="A course's labs, by tier, and its notes, each with its quiz size, an Exam button and its labs" width="640"></p>
+
+### Labs
+
+A lab gives you one source file with a flag hidden in it, and you can solve it just by reading. The flag is checked on your device, and only its SHA-256 hash is stored.
+
+<p align="center"><img src="docs/images/lab-task.png" alt="A lab's task and its C source file, with an inline-assembly function to trace" width="640"></p>
+
+Hints are nudges of a few words, the way a CTF writes them. Each hint costs 15% of the lab's score.
+
+<p align="center"><img src="docs/images/lab-hints.png" alt="The flag box, and the first of three hints revealed" width="640"></p>
+
+### Memory on your notes
+
+In reading view, each heading that has questions gets a dot. Green means an expected score of 80% or more, amber 50% or more, red below that, and grey means no answers yet.
+
+<p align="center"><img src="docs/images/note-dots.png" alt="Two headings in reading view, one with a grey memory dot and one with an amber dot" width="480"></p>
+
+Each note's footer shows what is due in the note and has a button to review it. **Complete** marks the note as read and builds its quiz. The status bar shows how many questions are due today.
+
+<p align="center"><img src="docs/images/note-footer.png" alt="A note's footer: 14 due, last reviewed 2 days ago, a Review this note button and a Complete button" width="760"></p>
+
+### History
+
+History shows your sessions and scores, and a year of activity with your streak. It also shows how often you were right when you said *Sure*.
+
+<p align="center"><img src="docs/images/history.png" alt="History: sessions, questions answered, mean score, an activity calendar with the streak, and how often Sure answers were right" width="640"></p>
+
+## How it works
+
+```mermaid
+sequenceDiagram
+    actor You
+    participant RL as Recall Lab
+    participant V as Vault (_quiz/)
+    participant C as Claude Code CLI
+    You->>RL: Mark a note complete
+    RL->>C: Write a quiz from the note
+    C-->>RL: Questions, as JSON
+    RL->>V: Check them and save the quiz
+    You->>RL: Take an exam or today's review
+    RL->>RL: Mark choice, hands-on and fill-in questions on your device
+    RL->>C: Mark written answers
+    C-->>RL: Score, feedback, missed points
+    RL->>V: Save each answer to attempts.json
+    RL->>RL: FSRS works out what is due, and when
+    RL-->>You: Today's review, memory dots on notes, skill radar
+```
+
+- **Marked on your device.** Choice, hands-on and fill-in-the-blank questions are marked instantly, offline.
+- **Marked by Claude.** Written, command and image answers go to the Claude Code CLI with the question's rubric and the strictness you chose. If an answer matches the question's accept pattern, it passes without a request. If Claude can't be reached, the answer is kept, but it never counts against you.
+- **Scheduled from your history.** Every answer is saved to `_quiz/progress/attempts.json`. The schedule is rebuilt from that file each time, so it always matches your real history.
 
 ## Requirements
 
-- Obsidian 1.5 or later, on desktop.
-- The Claude Code CLI, installed and signed in. Recall Lab looks in the usual
-  install locations and asks your login shell; if it still cannot find it, set
-  the path under **Settings → Recall Lab → Path to the claude binary** and use
-  **Check the connection** to test it.
-- macOS or Linux. It is developed and tested on macOS. On Windows it needs
-  `claude.exe` from Claude Code's native installer — an npm install only
-  provides `claude.cmd`, which it cannot start — and it is untested there.
+- **Obsidian 1.5 or later**, on desktop.
+- **The Claude Code CLI**, installed and signed in. Recall Lab finds it in the usual install locations. If it doesn't, set **Settings → Recall Lab → Path to the claude binary**, then press **Test** under **Check the connection**.
+- **macOS or Linux.** Recall Lab is developed and tested on macOS. Windows is untested. It also needs `claude.exe` from Claude Code's native installer; an npm install only provides `claude.cmd`, which Recall Lab can't start.
 
 ## Install
 
-1. Download `main.js`, `manifest.json` and `styles.css` from the
-   [latest release](https://github.com/MYounas126/recall-lab/releases/latest),
-   or its `recall-lab-<version>.zip`, which holds them in a `recall-lab` folder.
-   `SHA256SUMS.txt` lists each file's checksum.
-2. Quit Obsidian and put the three files in your vault's plugins folder:
+1. From the [latest release](https://github.com/MYounas126/recall-lab/releases/latest), download `main.js`, `manifest.json` and `styles.css`. The release zip holds the same three files in a `recall-lab` folder, and `SHA256SUMS.txt` lists their checksums.
+2. Put the three files directly in `<vault>/.obsidian/plugins/recall-lab/`.
+3. Reload Obsidian. Then, under **Settings → Community plugins**, turn off Restricted mode if it is on and enable **Recall Lab**.
 
-   `<vault>/.obsidian/plugins/recall-lab/`
+To update, replace the three files and reload Obsidian. Your quizzes, labs and history live in the vault, so they are kept.
 
-   They must sit directly in that folder, not in a nested one.
-3. Start Obsidian → **Settings → Community plugins** → enable **Recall Lab**.
-   (Community plugins must not be in restricted/safe mode.)
-4. Click the graduation-cap ribbon icon, or run **Recall Lab: Open Recall Lab**.
+## Quick start
 
-To update, replace the three files with a newer release's and reload Obsidian.
-Your quizzes, labs and history live in the vault and are kept.
+1. Open Recall Lab with the graduation-cap icon in the ribbon, or run **Recall Lab: Open Recall Lab**.
+2. Pick a folder of notes under **Folders** and press **Set up this course**. Claude reads a sample of the notes and names the course's skill areas.
+3. To build a quiz, press **Generate** next to a note. Or press **Complete** at the end of a note you have finished reading.
+4. Press **Exam** to take the quiz. After that, the questions you need appear in **Today's review** on the overview.
 
-## How marking works
+## Documentation
 
-```
-  you answer ──► MCQ / select-all / accept pattern ──► marked instantly, offline
-             └─► text, command, image ──► Claude Code CLI ──► score, feedback,
-                                                               missed rubric points
-  you finish ──► Claude reads the whole exam back ──► coaching on the pattern
-                                                      behind your mistakes
-```
+- **[User guide](docs/user-guide.md)**: every feature, plus settings, commands, keyboard shortcuts and the files Recall Lab keeps.
+- **[Question bank format](docs/bank-format.md)**: the JSON format quizzes are stored in, for editing quizzes or writing your own.
+- **[Development](docs/development.md)**: building, testing, CI and how releases are made.
+- **[Changelog](CHANGELOG.md)**: what each release added and fixed.
 
-An open answer is marked in place: the model answer shows while Claude marks,
-then the score, the feedback and any rubric points you missed. If Claude cannot
-be reached, the answer is kept with the reason, so an exam never stalls, but it
-never counts against you: it is left out of your scores and your schedule. **Strictness** (lenient, normal or brutal) is set in settings and
-written into every marking request.
+## Privacy
 
-**Second try.** When Claude marks a written answer as not right, it also asks
-one nudging question that points at what was missed without giving it away.
-You can try again before the model answer shows; the second try is marked
-again (one more Claude request), earns at most 75%, and brings the question
-back soon, since it needed the nudge. Settings → Questions turns this off.
+- Recall Lab keeps everything in your vault, under `_quiz/`. It has no server, no account and no telemetry, and it makes no network requests of its own.
+- Anything that needs judgement runs through your own Claude Code CLI. That means the note or answer involved is sent to Anthropic under your Claude plan. Choice, hands-on and fill-in-the-blank questions are marked on your device.
+- Lab flags are stored only as SHA-256 hashes.
 
-**Guided steps.** A brutal problem can carry 3 to 5 smaller steps that walk up
-to it, each a question marked on your device. When the problem is new to you,
-or you missed it last time, you work through the steps first, each checked at
-once, then answer the whole problem unaided. Steps are written per course on
-request (*Write guided steps*, which uses Claude), and step answers are not
-recorded.
+## License
 
-**Write it all down.** The pencil beside a note, or the command **Write down
-everything I remember about this note**, opens a page with a three-minute
-clock: without looking, write everything you remember. Claude then compares it
-with the note section by section (one request) and shows what you covered,
-what you left out with links to those sections, and how much of the note came
-back. *Start the quiz* then asks the left-out sections first. History keeps
-your recent results. Leave the page before pressing Done and it waits for you:
-opening the same note's page again picks up your writing and the clock.
-
-**Teach it back.** The speech bubble beside a note, or the command **Teach
-this note back**, has you explain the note to a curious beginner played by
-Claude. It asks one question at a time wherever you were vague or skipped
-something (up to three; Settings → Questions), and stops early once you have
-covered it. Claude then scores how many of the note's key points you conveyed
-anywhere in the conversation, and links the ones you never got to. Each
-student reply is one Claude request, and the score is one more.
-
-**Recall before recognition** (Settings → Questions, or *Recall first* in the
-exam bar) hides the options of multiple-choice and select-all questions until
-you have typed, or just thought of, your answer. Producing an answer builds
-memory better than spotting one; what you typed is shown above the options and
-kept with your answer. Switching it in the exam bar while the options are
-already showing takes effect from the next question.
-
-## Daily review
-
-Every answer you give, in any exam, feeds a spaced-repetition schedule run by
-[FSRS](https://github.com/open-spaced-repetition/ts-fsrs), the scheduler Anki
-added in version 23.10. **Today's review** on the overview, or **Start today's
-review** from the command palette, asks what is due across every course, the
-questions you are closest to forgetting first, then up to a daily allowance of
-new questions. New questions only come from notes you have marked complete or
-already taken an exam on. Each course has its own review as well.
-
-A miss brings a question back the next day; each correct answer pushes it
-further out. Answers are saved as you go, so you can stop at any point. Reviews
-stay offline apart from marking written answers: feedback from Claude is one
-button away rather than automatic.
-
-**How sure are you?** Every question has three submit buttons: *Guessing*,
-*Submit* and *Sure*. A right answer you were guessing at comes back as if you
-had missed it; right, sure and faster than your usual pace is spaced out
-further. Plain *Submit* claims neither. Mistakes you were sure about get their
-own list on the results screen (they stick unusually well once corrected), and
-History shows how often each level of confidence turned out right.
-
-**Variants.** Once you have answered a question right twice running, its look
-(the option's position, the wording) can start carrying the answer. A course
-with such questions offers *Write variants*, as does the command **Write
-variants for mature questions**: Claude writes two versions of each that test
-the same idea dressed differently. It asks first, since it uses your plan.
-Reviews then ask a variant in place of a mature question, rotating through
-them, and the answer still counts toward the original's schedule.
-
-**Leech clinic.** A question you have missed four times or more, and not
-since got right twice running, is a misunderstanding rather than forgetting,
-and more reviews will not fix it. The overview lists these; *Diagnose (uses
-Claude)* has Claude read your wrong answers, name the misconception, and write
-a short step-by-step lesson plus a fresh question on the same idea. Your
-answer to it counts toward the original's schedule. The threshold is under
-Settings → Questions.
-
-**Memory map.** In reading view, each heading that questions point at gets a
-dot: green when you would expect to score 80% or more on its questions right
-now, amber from 50%, red below, grey when none has been answered. Hover it for
-the details. Each note's footer shows how many of its questions are due and
-when you last reviewed it, with a **Review this note** button that reviews
-just what is due there (new questions come in the daily review), and the
-status bar shows today's due count; click it to start reviewing. **Settings → Daily
-review → Memory map on notes** turns all three off.
-
-**Streaks and keys.** Your streak counts days that end with nothing overdue,
-not how much you answered, and today cannot break it until it is over. A day
-is recorded once it ends, so changing the target recall later never rewrites
-it. History shows a year of activity as a calendar, with days that ended overdue
-outlined. On the exam screen, `1`–`9` pick an option, `Enter` submits, `G` and
-`S` submit as Guessing and Sure, `D` gives up on a written answer, and `Enter`
-or `Space` moves on. In a text box, `Cmd`/`Ctrl`+`Enter` submits and `Esc`
-leaves the box.
-
-**Settings → Daily review** sets the target recall (90% by default; higher
-means more frequent reviews) and how many new questions a day may bring in
-(20). The schedule itself is never stored: it is rebuilt from `attempts.json`
-each time, so it cannot drift out of step with your answer history.
-
-## Building courses, quizzes and labs
-
-- **Set up a course.** Pick a folder in the Recall Lab sidebar and press *Set
-  up this course*. Claude samples its notes and names 5–7 skill areas, which
-  become the spokes of the course's radar.
-- **Quiz a note.** Press *Generate* beside it, press *Complete* at the foot of
-  any note in a course folder, or run **Quiz me on this note**.
-- **Every missing quiz at once.** *Generate all N missing quizzes…* in the
-  course view shows an estimate, asks first, and can be stopped at any point.
-- **Labs.** *Labs* beside a note that has a quiz writes three CTF-style
-  challenges — one source file each, solvable by reading. Only a SHA-256 hash
-  of each flag is kept. Hints read like a CTF's: Claude is asked for three
-  nudges of a few words ("Mind the register width."), and one that is long,
-  quotes a long value or the flag is dropped. Each costs 15% of the lab's
-  score and appears where you are, without redrawing the page. The first wrong
-  flag is free and each new one after it costs 5%; one you already tried costs
-  nothing. Labs written before this have step-by-step hints; **Shorten lab
-  hints to CTF-style nudges** rewrites those of your open labs (a few labs per
-  Claude request), and a lab's own page offers to shorten just its hints.
-
-Builds run one at a time. Anything you ask for while one is running is queued
-behind it, and asking twice for the same note does not build it twice.
-
-**Hands-on question types.** Where a note suits them, new quizzes also include
-*click the bug* (click the faulty line in numbered code), *step-through trace*
-(fill in register and flag values after each instruction, checked step by
-step), *order the steps* and *match*. All are marked instantly on your device.
-Quizzes built before this get them when rebuilt, which uses Claude.
-
-**Fill in your highlights.** Every sentence with `==highlighted==` text in a
-course note becomes a fill-in-the-blank question, made on your device with no
-Claude involved. They join that note's exams and your reviews (Settings →
-Questions). Each one keeps its history until you edit that sentence; renaming
-or moving the note keeps it too. Highlights inside code, table rows and
-sentences containing `{`, `}` or `|` are left alone.
-
-## Files it uses, all inside your vault
-
-| Path | What it is |
-|---|---|
-| `_quiz/courses/*.json` | Course definitions: the folder each one covers and its skill areas. |
-| `_quiz/banks/*.json` | Question banks, one per note. |
-| `_quiz/labs/*.json` | Labs, with each flag stored only as a hash. |
-| `_quiz/progress/attempts.json` | Every answer, score and piece of feedback; every exam; notes marked complete; lab progress; finished days for the streak; write-it-down and teach-it-back results; leech diagnoses. It is never overwritten if it cannot be read. |
-| `_quiz/progress/recall-lab.log` | A plain-text log of the last 400 events, for when something goes wrong. |
-
-A lab you choose to write out — to compile or run it yourself — goes to
-`~/RecallLab/labs/`, outside the vault.
-
-Quizzes and labs are tied to their note by path, and courses to their folder.
-After deleting or renaming notes, run **Remove leftover quizzes, labs and
-courses**: it lists what no longer has a note or folder and, once you confirm,
-moves it to the trash. Your answer history is kept.
-
-## Tiers
-
-Easy (recall), Hard (application) and Brutal (synthesis and hands-on). An exam
-ramps through all three — about 45% easy, 35% hard and 20% brutal — and within
-each tier asks unseen questions first, then your weakest, then the ones you
-have not seen for longest.
-
-The radar shows, for each skill area, the score you would expect if asked
-right now: how well you have answered its questions (each question's mean over
-its last three scores, so one lucky guess does not erase a history of getting
-it wrong) times how likely you are to still remember them. Questions never
-answered count as zero, so a spoke answers *how much of this area do I own*,
-not *how did I do on the three I tried*. Spokes fade between reviews; a dashed
-outline shows where the radar stood a week ago.
-
-## Bank format
-
-```jsonc
-{
-  "id": "arch1001-03",
-  "title": "Arch1001 · 03 — Registers",
-  "note": "Architecture 1001 - Intel x86-64 Assembly/03 Registers.md",
-  "questions": [
-    {
-      "id": "r03-e13",
-      "tier": "easy",              // easy | hard | brutal
-      "type": "mcq",               // mcq | multi | short | command | image | hotspot | trace | order | match | cloze
-      "topic": "abcd-ordering",    // aggregates into weak areas
-      "axis": "register-model",    // the course skill area it feeds on the radar
-      "prompt": "Which register number is `RBX`?",
-      "code": "optional monospace block",
-      "choices": ["`R3`", "`R1`", "`R2`", "`R4`"],
-      "answer": 0,                 // mcq: index. multi: array of indices.
-      "accept": ["^r3$"],          // short/command: instant pass, skips Claude
-      "expected": "model answer",  // shown after answering; given to Claude
-      "rubric": ["point one"],     // what full credit requires
-      "explain": "shown whatever the verdict",
-      "ref": "03 Registers#4.1 …", // click through to the note
-      "timestamp": "P1 03:16",
-      "slide": 13
-    }
-  ]
-}
-```
-
-An `accept` pattern that does not match never fails the answer — it just sends
-it to Claude. A correct answer phrased unusually must not be failed by a regex.
-
-The hands-on types carry their own fields:
-
-| Type | Fields |
-|---|---|
-| `hotspot` | `code`, and `lines`: the 1-based answer line(s). |
-| `trace` | `code`, and `trace`: `[{"line": 2, "expect": {"eax": "0x11", "ZF": "0"}}]`. Answers may be decimal, `0x…`, `…h` or `0b…`; flags may be `0`/`1` or `set`/`clear`. A negative value is read at the named register's width (`-1` is `0xFFFFFFFF` in `eax` but not in `rax`). |
-| `order` | `items`, in the correct order. Shown shuffled; scored by how much you improved on the shuffle (the longest stretch in the right order), so an untouched list scores nothing. |
-| `match` | `pairs`: `[["left", "right"], …]`, every right side different. |
-| `cloze` | `cloze`: text with `{{answer}}` or `{{answer\|alternative}}` blanks. |
-
-A broken hands-on question is dropped when a quiz is built, rather than failing
-the whole quiz.
-
-## Develop
-
-```bash
-npm install
-npm run dev     # rebuild main.js on every change
-npm run build   # type-check, then a minified production main.js
-npm test        # unit tests, run under Node with a stand-in for Obsidian
-npm run check   # manifest.json, package.json and versions.json agree
-```
-
-`src/` holds the plugin: `main.ts` wires it into Obsidian, `view.ts` draws the
-Recall Lab pane, `tasks.ts` holds every prompt sent to Claude and checks what
-comes back, `memory.ts` runs the FSRS schedule, and the rest each own one
-feature (`labs.ts`, `highlights.ts`, `blurt.ts`, `teach.ts`, `leeches.ts`, …).
-Tests live in `test/`; `test/run.mjs` bundles each one with esbuild, swapping
-`obsidian` for `test/obsidian-shim.ts`, and runs it with Node's test runner.
-
-### Continuous integration
-
-[`ci.yml`](.github/workflows/ci.yml) runs on every push to `main` and every
-pull request, on Node 20 and 22: it installs exactly what `package-lock.json`
-locks, type-checks, runs the tests, makes the production build and checks the
-manifest. The run's summary shows the bundle's size, and the built plugin is
-kept as an artifact for 14 days, so any commit can be tried in a vault. A
-second job audits dependencies: an advisory in what ships inside `main.js`
-fails the run, one in build tooling only warns.
-
-[Dependabot](.github/dependabot.yml) opens weekly pull requests for the build
-tooling and the workflows' actions. `ts-fsrs` is pinned, since it computes
-every review schedule; new versions of it are left to a deliberate change.
-
-Pull requests are also reviewed by Claude
-([`claude-code-review.yml`](.github/workflows/claude-code-review.yml)), except
-drafts and Dependabot's, and mentioning `@claude` in an issue or a review
-comment asks it for help ([`claude.yml`](.github/workflows/claude.yml)). Both
-need the `CLAUDE_CODE_OAUTH_TOKEN` secret and use your Claude plan.
-
-### Releasing
-
-```bash
-# 1. Add a "## [0.5.0] - <date>" section to CHANGELOG.md and commit it.
-# 2. Bump package.json, manifest.json and versions.json, commit, and tag 0.5.0:
-npm version 0.5.0
-# 3. Publish:
-git push && git push origin 0.5.0
-```
-
-Pushing the tag runs [`release.yml`](.github/workflows/release.yml): it
-type-checks, tests and builds that exact commit, refuses a tag that does not
-match `manifest.json`, and publishes a GitHub release with `main.js`,
-`manifest.json`, `styles.css`, a zip of the plugin folder and their SHA-256
-checksums. The release notes are the version's section of `CHANGELOG.md`.
-Tags are the bare version, as Obsidian expects (`0.5.0`, not `v0.5.0`); a tag
-with a suffix such as `0.5.0-beta.1` is published as a pre-release.
+[MIT](LICENSE) © 2026 Younas Janas
