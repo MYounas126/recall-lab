@@ -68,7 +68,7 @@ flowchart LR
     CR --> M
     M --> T["npm version x.y.z, then push the tag"]
     T --> R["Release workflow: test, build, check the tag"]
-    R --> G["GitHub release: main.js, manifest.json, styles.css, zip, SHA256SUMS"]
+    R --> G["GitHub release: main.js, manifest.json, styles.css, with build attestations"]
 ```
 
 | Workflow | Runs on | What it does |
@@ -107,7 +107,7 @@ Pushing the tag runs `release.yml`, which does the following:
 
 1. Type-checks, tests and builds that exact commit.
 2. Refuses the tag if it doesn't match `manifest.json`.
-3. Publishes a GitHub release with `main.js`, `manifest.json`, `styles.css`, a zip of the plugin folder and their SHA-256 checksums.
+3. Publishes a GitHub release with `main.js`, `manifest.json` and `styles.css`, each with a GitHub build attestation.
 
 The release notes are that version's section of `CHANGELOG.md`.
 

@@ -10,7 +10,7 @@ Claude writes them and marks open answers through the Claude Code CLI, so you do
 <p align="center">
   <a href="https://github.com/MYounas126/recall-lab/actions/workflows/ci.yml"><img src="https://github.com/MYounas126/recall-lab/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/MYounas126/recall-lab/releases"><img src="https://github.com/MYounas126/recall-lab/actions/workflows/release.yml/badge.svg" alt="Release"></a>
-  <img src="https://img.shields.io/badge/Obsidian-1.5%2B%20desktop-7C3AED?logo=obsidian&logoColor=white" alt="Obsidian 1.5+, desktop">
+  <img src="https://img.shields.io/badge/Obsidian-1.7.2%2B%20desktop-7C3AED?logo=obsidian&logoColor=white" alt="Obsidian 1.7.2+, desktop">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
 </p>
 
@@ -110,17 +110,29 @@ sequenceDiagram
 
 ## Requirements
 
-- **Obsidian 1.5 or later**, on desktop.
+- **Obsidian 1.7.2 or later**, on desktop.
 - **The Claude Code CLI**, installed and signed in. Recall Lab finds it in the usual install locations. If it doesn't, set **Settings → Recall Lab → Path to the Claude binary**, then press **Test** under **Check the connection**.
 - **macOS or Linux.** Recall Lab is developed and tested on macOS. Windows is untested. It also needs `claude.exe` from Claude Code's native installer; an npm install only provides `claude.cmd`, which Recall Lab can't start.
 
 ## Install
 
-1. From the [latest release](https://github.com/MYounas126/recall-lab/releases/latest), download `main.js`, `manifest.json` and `styles.css`. The release zip holds the same three files in a `recall-lab` folder, and `SHA256SUMS.txt` lists their checksums.
-2. Put the three files directly in `<vault>/.obsidian/plugins/recall-lab/`.
-3. Reload Obsidian. Then, under **Settings → Community plugins**, turn off Restricted mode if it is on and enable **Recall Lab**.
+**From Obsidian:**
 
-To update, replace the three files and reload Obsidian. Your quizzes, labs and history live in the vault, so they are kept.
+1. Open **Settings → Community plugins** and turn off Restricted mode if it is on.
+2. Select **Browse** and search for **Recall Lab**.
+3. Select **Install**, then **Enable**.
+
+Updates then arrive through Obsidian. The plugin's page in the directory is [community.obsidian.md/plugins/recall-lab](https://community.obsidian.md/plugins/recall-lab).
+
+**By hand:**
+
+1. From the [latest release](https://github.com/MYounas126/recall-lab/releases/latest), download `main.js`, `manifest.json` and `styles.css`.
+2. Put the three files directly in `<vault>/.obsidian/plugins/recall-lab/`.
+3. Reload Obsidian, then enable **Recall Lab** under **Settings → Community plugins**.
+
+Each file has a GitHub build attestation. `gh attestation verify main.js -R MYounas126/recall-lab` checks it was built from this repository. To update by hand, replace the three files and reload Obsidian.
+
+Your quizzes, labs and history live in the vault, so they are kept across updates.
 
 ## Quick start
 
@@ -135,6 +147,7 @@ To update, replace the three files and reload Obsidian. Your quizzes, labs and h
 - **[Question bank format](docs/bank-format.md)**: the JSON format quizzes are stored in, for editing quizzes or writing your own.
 - **[Development](docs/development.md)**: building, testing, CI and how releases are made.
 - **[Changelog](CHANGELOG.md)**: what each release added and fixed.
+- **[Contributing](CONTRIBUTING.md)**: how to report a bug or send a change.
 
 ## Privacy and disclosures
 

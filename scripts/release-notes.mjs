@@ -28,8 +28,10 @@ console.log(`${section}
 
 ### Install or update
 
-Download \`main.js\`, \`manifest.json\` and \`styles.css\` below into
-\`<vault>/.obsidian/plugins/recall-lab/\` (or unpack \`recall-lab-${version}.zip\`,
-which holds them in a \`recall-lab\` folder), then reload Obsidian and enable
-**Recall Lab** under Settings → Community plugins. \`SHA256SUMS.txt\` lists each
-file's checksum. Recall Lab needs the Claude Code CLI; see the README.`);
+In Obsidian, Recall Lab updates itself from Settings → Community plugins. To
+install by hand, download \`main.js\`, \`manifest.json\` and \`styles.css\` below
+into \`<vault>/.obsidian/plugins/recall-lab/\`, then reload Obsidian and enable
+**Recall Lab** under Settings → Community plugins. Each file has a GitHub build
+attestation: \`gh attestation verify main.js -R MYounas126/recall-lab\` checks it
+was built from this release's tag. Recall Lab needs the Claude Code CLI; see the
+README.`);

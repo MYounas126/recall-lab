@@ -4,6 +4,36 @@ Every release of Recall Lab. Versions follow the plugin's manifest, and each
 release is tagged with the bare version (`0.4.0`), as Obsidian expects. The
 release workflow publishes a version's section below as its release notes.
 
+## [0.5.1] - 2026-10-19
+
+Fixes what Obsidian's community directory flagged in its review of 0.5.0.
+
+### Fixed
+
+- **Minimum Obsidian version.** The plugin now declares Obsidian 1.7.2 or
+  later. It already used `Workspace.revealLeaf` returning a promise, from
+  1.7.2, and `FileManager.trashFile`, from 1.6.6, which 1.5.0 did not have.
+  On an older Obsidian you keep 0.5.0.
+- Leftover quizzes, labs and courses always go to the trash through
+  `FileManager.trashFile`, which follows your "Deleted files" setting. The
+  fallback for older Obsidian versions is gone.
+- Match questions lay out each pair as its own grid row instead of with
+  `display: contents`, which older Electron versions support only in part.
+  They look the same.
+
+### Changed
+
+- Each release file now has a GitHub build attestation. To check a file was
+  built from this repository, run
+  `gh attestation verify main.js -R MYounas126/recall-lab`. The extra zip and
+  `SHA256SUMS.txt` are no longer attached, as Obsidian downloads only the
+  three plugin files.
+- The README explains how to install from Obsidian's Community plugins.
+
+### Documentation
+
+- A contributing guide: `CONTRIBUTING.md`.
+
 ## [0.5.0] - 2026-10-19
 
 Tier gates make the Progression settings real, and highlights reach your
@@ -136,6 +166,7 @@ text, shell commands and image answers), marked instantly or by Claude through
 the Claude Code CLI; CTF-style hands-on labs with hashed flags; a skill radar
 per course; and a full answer history.
 
+[0.5.1]: https://github.com/MYounas126/recall-lab/releases/tag/0.5.1
 [0.5.0]: https://github.com/MYounas126/recall-lab/releases/tag/0.5.0
 [0.4.0]: https://github.com/MYounas126/recall-lab/releases/tag/0.4.0
 [0.3.0]: https://github.com/MYounas126/recall-lab/commit/23f4e9a

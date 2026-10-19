@@ -1,7 +1,8 @@
 # Continuous delivery: pushing a version tag builds, tests and publishes a
 # GitHub release with the three files Obsidian installs from (main.js,
-# manifest.json, styles.css), a zip of the plugin folder and checksums. The
-# release notes are that version's section of CHANGELOG.md.
+# manifest.json, styles.css), each with a GitHub build attestation that proves
+# it was built here, from that tag. The release notes are that version's
+# section of CHANGELOG.md.
 #
 # To release:  add a "## [0.5.0]" section to CHANGELOG.md and commit it, then
 #              npm version 0.5.0   (bumps package.json, manifest.json and
@@ -32,6 +33,9 @@ concurrency:
 
 permissions:
   contents: write
+  # For the build attestations.
+  id-token: write
+  attestations: write
 
 jobs:
   release:
@@ -69,12 +73,18 @@ jobs:
 
       - name: Package
         run: |
-          mkdir -p dist/recall-lab
+          mkdir -p dist
           cp main.js manifest.json styles.css dist/
-          cp main.js manifest.json styles.css dist/recall-lab/
-          (cd dist && zip -qr "recall-lab-$TAG.zip" recall-lab && rm -r recall-lab)
-          (cd dist && sha256sum main.js manifest.json styles.css "recall-lab-$TAG.zip" > SHA256SUMS.txt)
-          cat dist/SHA256SUMS.txt
+
+      # Lets anyone check a file came from this workflow and this tag:
+      #   gh attestation verify main.js -R MYounas126/recall-lab
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            dist/main.js
+            dist/manifest.json
+            dist/styles.css
 
       - name: Release notes from CHANGELOG.md
         run: node scripts/release-notes.mjs "$TAG" > dist/NOTES.md
@@ -83,7 +93,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          files=(dist/main.js dist/manifest.json dist/styles.css "dist/recall-lab-$TAG.zip" dist/SHA256SUMS.txt)
+          files=(dist/main.js dist/manifest.json dist/styles.css)
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" "${files[@]}" --clobber
             gh release edit "$TAG" --title "Recall Lab $TAG" --notes-file dist/NOTES.md

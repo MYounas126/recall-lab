@@ -676,11 +676,12 @@
 .rl-order-btn { padding: 0.1rem 0.5rem; }
 
 /* Match */
-.rl-match {
+.rl-match { display: grid; gap: 0.4rem; margin: 0.5rem 0; }
+/* Each row its own grid on the same columns, so the pairs still line up. */
+.rl-match-row {
 	display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(10rem, 1.4fr);
-	gap: 0.4rem 0.8rem; align-items: center; margin: 0.5rem 0;
+	gap: 0.8rem; align-items: center;
 }
-.rl-match-row { display: contents; }
 
 /* Fill in the blank */
 .rl-cloze { line-height: 2.2; margin: 0.6rem 0; }
