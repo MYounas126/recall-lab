@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import { strict as assert } from "node:assert";
-import { hashFlag, hintsNeedShortening, isNudge, leaksFlag, nudges } from "../src/labs";
+import { checkFlag, decodeCheck, hashFlag, hintsNeedShortening, isNudge, leaksFlag, numbersIn, nudges, parseCheck, verifyCheck, writtenInOrder } from "../src/labs";
+import { labScore } from "../src/types";
 import { Tasks, hintsPrompt, labPrompt } from "../src/tasks";
 import type { Course, Lab } from "../src/types";
 import { makeVault } from "./helpers";
@@ -155,4 +156,111 @@ test("many labs are rewritten a few per request", async () => {
 	const res = await tasks.rewriteHints(labs);
 	assert.equal(prompts, 3, "9 labs, 4 per request");
 	assert.equal(Object.keys(res).length, 9);
+});
+
+// ------------------------------------------------------- is the flag there?
+
+// A flag hidden the way the prompt asks: XOR'd against a key the learner
+// works out from the code. Nothing in the file reads as the flag.
+const FLAG = "flag{r9_holds_4}";
+const KEY = [0x5a, 0xa5];
+const CIPHER = [..."r9_holds_4"].map((c, i) => c.charCodeAt(0) ^ KEY[i % KEY.length]);
+const hex = (b: number) => `0x${b.toString(16).padStart(2, "0")}`;
+const XOR_FILE = `/* The key is the two bytes of the register that holds the fourth argument. */
+static const unsigned char enc[] = { ${CIPHER.map(hex).join(", ")} };
+int main(void) { return 0; }`;
+
+test("numbers are read from a file the way it writes them", () => {
+	assert.deepEqual(numbersIn(`{ 0x2F, 47, '\\x2f', 'a', '\\n' } "\\x41\\x42"`), [0x2f, 47, 0x2f, 97, 10, 0x41, 0x42]);
+	assert.ok(writtenInOrder("int a[] = {1, 2, 3, 4};", [2, 3, 4]));
+	assert.ok(!writtenInOrder("int a[] = {1, 2, 9, 3, 4};", [2, 3, 4]), "in order and unbroken");
+	assert.ok(writtenInOrder('k = "deadbeef"', [0xde, 0xad, 0xbe, 0xef]), "or as one hex string");
+});
+
+test("a check turns its cipher into text by xor, add or sub, and wraps at 256", () => {
+	assert.equal(decodeCheck({ op: "xor", cipher: CIPHER, key: KEY }), "r9_holds_4");
+	assert.equal(decodeCheck({ op: "add", cipher: [0xff, 0x60], key: [0x42, 0x01] }), "Aa");
+	assert.equal(decodeCheck({ op: "sub", cipher: [0x01, 0x63], key: [0xc0, 0x02] }), "Aa");
+	assert.deepEqual(parseCheck({ op: "xor", cipher: ["0x2f", "47"], key: [1] }), { op: "xor", cipher: [47, 47], key: [1] });
+	assert.equal(parseCheck({ op: "rot13", cipher: [1], key: [1] }), null);
+	assert.equal(parseCheck({ op: "xor", cipher: [256], key: [1] }), null, "bytes only");
+});
+
+test("a check proves the flag only if its bytes are in the file and decode to the flag", () => {
+	const check = { op: "xor", cipher: CIPHER, key: KEY };
+	assert.equal(verifyCheck(check, XOR_FILE, FLAG), true);
+	assert.equal(verifyCheck(undefined, XOR_FILE, FLAG), null);
+	assert.equal(verifyCheck({ ...check, key: [0x5a, 0xa6] }, XOR_FILE, FLAG), "its check does not decode to its flag");
+	assert.equal(verifyCheck(check, "int main(void) { return 0; }", FLAG), "the bytes its check names are not in the file");
+	assert.equal(verifyCheck({ op: "xor" }, XOR_FILE, FLAG), "its check is malformed");
+});
+
+function labTasks(labs: unknown[]) {
+	const vault = makeVault(0);
+	vault.files.set("Arch/08 Function Parameters.md", "# Function parameters\nRCX, RDX, R8, R9.");
+	const cli = { askJson: async () => ({ ok: true, data: { labs } }) };
+	return new Tasks({ vault } as never, cli as never, {} as never, () => "normal", () => "_quiz/banks", () => "_quiz/courses", () => "_quiz/labs");
+}
+const xorLab = (extra: Record<string, unknown>) => ({
+	title: "Who is argument four?", tier: "hard", axis: "regs", brief: "Find the flag.", setup: "cat src/args.c",
+	files: [{ path: "src/args.c", content: XOR_FILE }], hints: ["Count the registers."], flag: FLAG, solution: "XOR with R9's bytes.",
+	...extra,
+});
+
+test("a properly hidden flag is kept when its check proves it, and the check is not stored", async () => {
+	const res = await labTasks([xorLab({ check: { op: "xor", cipher: CIPHER.map(hex), key: KEY } })])
+		.generateLabs("Arch/08 Function Parameters.md", course, 1);
+	assert.ok(Array.isArray(res), JSON.stringify(res));
+	assert.equal(res[0].flagHash, hashFlag(FLAG));
+	assert.equal("check" in res[0], false, "the key is the answer, so it never reaches the vault");
+});
+
+test("without its check, the same lab cannot be shown to be solvable, and is not kept", async () => {
+	const res = await labTasks([xorLab({})]).generateLabs("Arch/08 Function Parameters.md", course, 1);
+	assert.ok(!Array.isArray(res));
+	assert.match(res.error, /its flag is not actually in the file/);
+	const wrong = await labTasks([xorLab({ check: { op: "xor", cipher: CIPHER, key: [1, 2] } })])
+		.generateLabs("Arch/08 Function Parameters.md", course, 1);
+	assert.ok(!Array.isArray(wrong));
+	assert.match(wrong.error, /its check does not decode to its flag/);
+});
+
+test("a flag written as a byte array of its character codes is found", async () => {
+	const codes = [..."r9_holds_4"].map((c) => c.charCodeAt(0)).join(", ");
+	const res = await labTasks([xorLab({ files: [{ path: "src/args.c", content: `int parts[] = { ${codes} };` }] })])
+		.generateLabs("Arch/08 Function Parameters.md", course, 1);
+	assert.ok(Array.isArray(res), JSON.stringify(res));
+});
+
+test("the lab prompt asks for a check, and keeps it from the learner", () => {
+	const prompt = labPrompt("Regs", "content", "Arch/03 Registers.md", course, 3, "gcc");
+	assert.match(prompt, /`check` lets Recall Lab confirm the lab can be solved/);
+	assert.match(prompt, /"check":\{"op":"xor","cipher":\[/);
+	assert.match(prompt, /never shown to the learner/);
+});
+
+// ------------------------------------------------------- submitting a flag
+
+test("the right flag is accepted however it is pasted, and nothing else is", () => {
+	const l = { ...lab("l", []), flagHash: hashFlag(FLAG) };
+	assert.ok(checkFlag(l, FLAG));
+	assert.ok(checkFlag(l, `  ${FLAG}\n`), "whitespace around a pasted flag is ignored");
+	assert.ok(checkFlag(l, "flag{ r9_holds_4 }"), "and so is whitespace inside it");
+	assert.ok(checkFlag({ ...l, flagHash: l.flagHash.toUpperCase() }, FLAG), "however the stored hash is cased");
+	assert.ok(!checkFlag(l, "flag{r9_holds_5}"), "one character off is wrong");
+	assert.ok(!checkFlag(l, "FLAG{R9_HOLDS_4}"), "flags are case-sensitive");
+	assert.ok(!checkFlag(l, "r9_holds_4"), "the flag{...} around it is part of the flag");
+	assert.ok(!checkFlag(l, ""));
+	assert.ok(!checkFlag({ ...l, flagHash: "" }, FLAG), "a lab with no hash takes no flag");
+});
+
+test("a lab's score: 15% a hint, 5% a wrong flag after the first, never below 25%, nothing until solved", () => {
+	const p = (attempts: number, hintsUsed: number, solved = true) =>
+		({ labId: "l", attempts, hintsUsed, solvedAt: solved ? "2026-10-19T10:00:00.000Z" : undefined });
+	assert.equal(labScore(p(0, 0)), 100);
+	assert.equal(labScore(p(1, 0)), 100, "the first wrong flag is free");
+	assert.equal(labScore(p(3, 0)), 90);
+	assert.equal(labScore(p(1, 2)), 70);
+	assert.equal(labScore(p(30, 3)), 25, "never below 25");
+	assert.equal(labScore(p(0, 0, false)), 0);
 });

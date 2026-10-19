@@ -55,6 +55,101 @@ export function hintsNeedShortening(lab: Lab): boolean {
 	return Array.isArray(lab.hints) && lab.hints.some((h) => !isNudge(h));
 }
 
+/**
+ * How a lab hides its flag, as Claude reports it: bytes written in the file
+ * (`cipher`), the bytes the learner works out (`key`, applied in turn and
+ * repeated), and how one turns into the other. With it, a flag that is
+ * properly hidden, XOR'd against a value the learner has to derive, can be
+ * confirmed as solvable without running anything. It is checked and then
+ * dropped, never stored: the key is the answer.
+ */
+export interface FlagCheck {
+	op: "xor" | "add" | "sub";
+	cipher: number[];
+	key: number[];
+}
+
+/** A byte from Claude's JSON, which may come as 47, "47" or "0x2f". */
+function byteOf(v: unknown): number | null {
+	const n = typeof v === "string" ? Number(v.trim()) : v;
+	return typeof n === "number" && Number.isInteger(n) && n >= 0 && n <= 255 ? n : null;
+}
+
+/** A well-formed check, or null. */
+export function parseCheck(raw: unknown): FlagCheck | null {
+	const c = raw as { op?: unknown; cipher?: unknown; key?: unknown } | null;
+	if (!c || typeof c !== "object" || !["xor", "add", "sub"].includes(String(c.op))) return null;
+	const bytes = (v: unknown) => {
+		if (!Array.isArray(v) || !v.length) return null;
+		const out = v.map(byteOf);
+		return out.every((b): b is number => b !== null) ? out : null;
+	};
+	const cipher = bytes(c.cipher);
+	const key = bytes(c.key);
+	return cipher && key ? { op: String(c.op) as FlagCheck["op"], cipher, key } : null;
+}
+
+/** What a check's cipher becomes under its key: what the learner gets out. `add` and `sub` wrap at 256. */
+export function decodeCheck(check: FlagCheck): string {
+	return String.fromCharCode(...check.cipher.map((b, i) => {
+		const k = check.key[i % check.key.length];
+		return check.op === "xor" ? b ^ k : check.op === "add" ? (b + k) & 0xff : (b - k + 256) & 0xff;
+	}));
+}
+
+/**
+ * The numbers a source file writes, in order: 0x2f and \x2f, decimals, and
+ * character literals such as 'f'. Enough to find a byte array or a string
+ * of escapes, in C, Python, JavaScript or assembly.
+ */
+export function numbersIn(text: string): number[] {
+	const out: number[] = [];
+	for (const [t] of text.matchAll(/0x[0-9a-f]+|\\x[0-9a-f]{2}|'(?:\\.|[^'\\])'|\b\d+\b/gi)) {
+		if (t.startsWith("'")) {
+			const body = t.slice(1, -1);
+			const escapes: Record<string, number> = { "\\n": 10, "\\t": 9, "\\0": 0, "\\\\": 92, "\\'": 39 };
+			out.push(body.length === 1 ? body.charCodeAt(0) : escapes[body] ?? body.charCodeAt(1));
+		} else if (/^\\x/i.test(t)) out.push(parseInt(t.slice(2), 16));
+		else if (/^0x/i.test(t)) out.push(parseInt(t.slice(2), 16));
+		else out.push(parseInt(t, 10));
+	}
+	return out;
+}
+
+/** Whether these bytes are written in the file, in order and unbroken: as numbers, or as one hex string. */
+export function writtenInOrder(text: string, bytes: number[]): boolean {
+	if (!bytes.length) return false;
+	const hex = bytes.map((b) => b.toString(16).padStart(2, "0")).join("");
+	if (bytes.length >= 4 && text.toLowerCase().includes(hex)) return true;
+	const nums = numbersIn(text);
+	for (let i = 0; i + bytes.length <= nums.length; i++) {
+		if (bytes.every((b, j) => nums[i + j] === b)) return true;
+	}
+	return false;
+}
+
+/**
+ * Whether a lab's check shows its flag can be worked out from its file: the
+ * cipher is written there and decodes to the flag, or to what is between
+ * its braces. True when it does, null when there is no check, and otherwise
+ * what is wrong with it.
+ */
+export function verifyCheck(raw: unknown, fileText: string, flag: string): true | string | null {
+	if (raw === undefined || raw === null) return null;
+	const check = parseCheck(raw);
+	if (!check) return "its check is malformed";
+	const out = decodeCheck(check);
+	if (out !== flag && out !== flag.replace(/^flag\{|\}$/g, "")) return "its check does not decode to its flag";
+	if (!writtenInOrder(fileText, check.cipher)) return "the bytes its check names are not in the file";
+	return true;
+}
+
+/** A flag's character codes, to find it written as a byte array: whole, or just what is between its braces. */
+export function flagCodes(flag: string): number[][] {
+	const codes = (s: string) => [...s].map((c) => c.charCodeAt(0));
+	return [codes(flag), codes(flag.replace(/^flag\{|\}$/g, ""))];
+}
+
 /** Rejects a lab that would be unusable or unsafe to hand over. */
 export function validateLab(lab: Lab): string | null {
 	if (!lab?.id) return "the lab has no id";

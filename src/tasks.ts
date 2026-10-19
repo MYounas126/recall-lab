@@ -5,7 +5,7 @@ import { Attempt, Bank, BlurtResult, Course, Diagnosis, Lab, Question, QuestionT
 import type { Leech } from "./leeches";
 import { Section, blurtPrompt, headingsOf, parseBlurt, sectionsOf } from "./blurt";
 import { parseStudent, parseTeachScore, studentPrompt, teachScorePrompt } from "./teach";
-import { hashFlag, leaksFlag, nudges, validateLab, detectToolchain, describeToolchain } from "./labs";
+import { describeToolchain, detectToolchain, flagCodes, hashFlag, leaksFlag, nudges, validateLab, verifyCheck, writtenInOrder } from "./labs";
 import type { Strictness } from "./settings";
 import { hashText } from "./util";
 import { answeredTo, plain } from "./answers";
@@ -158,7 +158,7 @@ export class Tasks {
 		const title = file.basename;
 
 		const prompt = labPrompt(title, content, notePath, course, count, describeToolchain(detectToolchain()));
-		const res = await this.cli.askJson<{ labs: (Lab & { flag: string })[] }>(prompt, 480000);
+		const res = await this.cli.askJson<{ labs: (Lab & { flag: string; check?: unknown })[] }>(prompt, 480000);
 		if (!res.ok) return { error: res.error };
 
 		const raw = Array.isArray(res.data?.labs) ? res.data.labs : [];
@@ -215,8 +215,15 @@ export class Tasks {
 				rejected.push(`"${lab.title}": flag in plain text, \`strings\` would solve it`);
 				continue;
 			}
-			if (!looksEncoded(haystack, bare) && !buildsFlag(haystack, bare)) {
-				rejected.push(`"${lab.title}": its flag is not actually in the file, so it could never be solved`);
+			// Found in the file in a form the learner can undo, or, for a flag
+			// properly hidden (XOR'd with a key they must derive), confirmed by
+			// the check Claude sends with it: the cipher bytes are in the file
+			// and decode to the flag. The check, which holds the key, is dropped.
+			const proof = verifyCheck(r.check, haystack, r.flag);
+			const found = proof === true || looksEncoded(haystack, bare) || buildsFlag(haystack, bare) ||
+				flagCodes(r.flag).some((codes) => writtenInOrder(haystack, codes));
+			if (!found) {
+				rejected.push(`"${lab.title}": ${proof ?? "its flag is not actually in the file, so it could never be solved"}`);
 				continue;
 			}
 
@@ -231,9 +238,9 @@ export class Tasks {
 		if (!out.length) {
 			return {
 				error:
-					`None of the ${raw.length} labs Claude wrote were usable. ` +
+					`None of the ${raw.length} labs Claude wrote could be used: ` +
 					rejected.join("; ") +
-					". This note may not have enough technical content to build a challenge from.",
+					". Trying again writes a fresh set. A note with little technical content may not suit a lab.",
 			};
 		}
 		if (rejected.length) {
@@ -642,6 +649,12 @@ export function labPrompt(
 		"  message, or an \"optional self-check\". `strings` must not reveal it. Build it from constants the",
 		"  learner has to combine, or XOR it against a value they must derive. If you want to give them a",
 		"  way to check their answer, compare against a hash or an encoded form, never against the flag.",
+		"- `check` lets Recall Lab confirm the lab can be solved, without running anything. `cipher` is the",
+		"  list of byte values exactly as the file writes them, in order; `key` the byte values the learner",
+		"  works out, applied in turn and repeated; `op` is xor, add or sub, so that op(cipher[i],",
+		"  key[i % key.length]) gives each character of the flag (add and sub wrap at 256). It may decode to",
+		"  the whole flag or to what is between the braces. If the flag is written straight into the file as",
+		"  character codes, leave `check` out. The check is never shown to the learner.",
 		"- `setup` is the shell commands to get going (compile, run). Keep it to a few lines. It is shown to",
 		"  the learner to read before they run it, so keep it obvious and harmless.",
 		...HINT_RULES,
@@ -655,6 +668,7 @@ export function labPrompt(
 		'  "files":[{"path":"src/target.c","content":"<full file>","executable":false}],',
 		'  "hints":["Mind the register width.","What does AH cover?","Not every write zero-extends."],',
 		'  "flag":"flag{...}","flagFormat":"flag{...}",',
+		'  "check":{"op":"xor","cipher":[47,146,89,59],"key":[73,254,56,92]},',
 		'  "solution":"<markdown walkthrough>"}]}',
 		"",
 		`Use axis ids from: ${course.axes.map((a) => a.id).join(", ")}`,
