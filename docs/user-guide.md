@@ -232,7 +232,7 @@ Run these from the command palette. Each one starts with **Recall Lab:**.
 
 | Command | What it does |
 |---|---|
-| Open Recall Lab | Opens the Recall Lab view. The graduation-cap icon in the ribbon does the same. |
+| Open view | Opens the Recall Lab view. The graduation-cap icon in the ribbon does the same. |
 | Start today's review | Starts the daily review across every course. |
 | Quiz me on this note | Builds the open note's quiz if it has none, then starts an exam. |
 | Write down everything I remember about this note | Opens *Write it all down* for the open note. |
@@ -253,7 +253,7 @@ To find these, open **Settings → Recall Lab**.
 | Section | Setting | Default | What it does |
 |---|---|---|---|
 | Claude | Model | Sonnet | Sonnet is balanced. Opus gives sharper feedback for about three times the usage. Haiku is cheapest. |
-| Claude | Path to the claude binary | *(empty)* | Leave this empty to find the CLI automatically. |
+| Claude | Path to the Claude binary | *(empty)* | Leave this empty to find the CLI automatically. |
 | Claude | Check the connection | | Press **Test** to confirm Recall Lab can reach Claude. |
 | Grading | Strictness | Brutal | How strictly Claude marks open answers: lenient, normal or brutal. |
 | Questions | Recall before recognition | Off | Hides the options of choice questions until you have tried to recall the answer. |
@@ -287,6 +287,6 @@ Everything lives in your vault, apart from labs you choose to write to disk.
 
 ## Troubleshooting
 
-- **Recall Lab can't find the Claude Code CLI.** Set **Path to the claude binary** to its full path, for example `/opt/homebrew/bin/claude`. Then press **Test** under **Check the connection**.
+- **Recall Lab can't find the Claude Code CLI.** Set **Path to the Claude binary** to its full path, for example `/opt/homebrew/bin/claude`. Then press **Test** under **Check the connection**.
 - **Something failed.** Use the **Run diagnostics** command. It shows where the CLI is and whether Claude replies (one small request). It also counts your courses, quizzes and exams. The details, along with every error, go to `_quiz/progress/recall-lab.log`.
 - **A quiz build failed.** The reason is in the log. Press **Generate** to try again.

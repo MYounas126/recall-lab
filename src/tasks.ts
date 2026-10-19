@@ -1,4 +1,4 @@
-import { App, Notice, TFile, normalizePath } from "obsidian";
+import { App, TFile, normalizePath } from "obsidian";
 import { ClaudeCli } from "./claude";
 import { Store } from "./store";
 import { Attempt, Bank, BlurtResult, Course, Diagnosis, Lab, Question, QuestionType, TeachResult, Turn, Verdict } from "./types";
@@ -832,7 +832,7 @@ export function checkFields(q: Question): string | null {
 	}
 	if (q.type === "multi") {
 		if (!Array.isArray(q.choices) || !Array.isArray(q.answer)) return "has no answer set";
-		q.answer = (q.answer as number[]).filter((n) => n >= 0 && n < q.choices!.length);
+		q.answer = q.answer.filter((n) => n >= 0 && n < q.choices!.length);
 		if (!q.answer.length) return "has no answer set";
 	}
 	if (q.type === "short" || q.type === "command" || q.type === "image") {
@@ -1098,7 +1098,7 @@ export function validateBank(bank: Bank, course: Course): string | null {
 			if (!Array.isArray(q.choices) || !Array.isArray(q.answer) || !q.answer.length) {
 				return `Question ${q.id} is select-all with no answer set.`;
 			}
-			q.answer = (q.answer as number[]).filter((n) => n >= 0 && n < q.choices!.length);
+			q.answer = q.answer.filter((n) => n >= 0 && n < q.choices!.length);
 			if (!q.answer.length) return `Question ${q.id} has an out-of-range answer set.`;
 		}
 		if ((q.type === "short" || q.type === "command" || q.type === "image") && !(q.rubric?.length)) {

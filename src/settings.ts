@@ -108,7 +108,7 @@ export class RecallLabSettingTab extends PluginSettingTab {
 			});
 
 		new Setting(containerEl)
-			.setName("Path to the claude binary")
+			.setName("Path to the Claude binary")
 			.setDesc("Leave blank to find it automatically. Set it if Recall Lab reports the CLI is missing when it is not.")
 			.addText((t) =>
 				t.setPlaceholder("/opt/homebrew/bin/claude")

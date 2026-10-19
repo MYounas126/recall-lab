@@ -1,4 +1,4 @@
-import { App, TFile, normalizePath } from "obsidian";
+import { App, normalizePath } from "obsidian";
 import { createHash } from "crypto";
 import * as fs from "fs";
 import * as path from "path";

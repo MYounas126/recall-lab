@@ -49,9 +49,10 @@ export class Log {
 			const path = this.file();
 			const existing = this.app.vault.getAbstractFileByPath(path);
 			if (existing instanceof TFile) {
-				const old = (await this.app.vault.read(existing)).split("\n");
-				const next = [...old, ...lines].filter(Boolean).slice(-MAX_LINES);
-				await this.app.vault.modify(existing, next.join("\n") + "\n");
+				// Read and written in one step, so a sync cannot slip a change in between.
+				await this.app.vault.process(existing, (old) =>
+					[...old.split("\n"), ...lines].filter(Boolean).slice(-MAX_LINES).join("\n") + "\n"
+				);
 			} else {
 				await this.ensureFolder();
 				await this.app.vault.create(path, lines.join("\n") + "\n");

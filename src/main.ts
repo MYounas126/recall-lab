@@ -83,7 +83,7 @@ export default class RecallLabPlugin extends Plugin {
 		this.addRibbonIcon("graduation-cap", "Recall Lab", () => void this.activate());
 		this.addSettingTab(new RecallLabSettingTab(this.app, this));
 
-		this.addCommand({ id: "open", name: "Open Recall Lab", callback: () => void this.activate() });
+		this.addCommand({ id: "open", name: "Open view", callback: () => void this.activate() });
 		this.addCommand({
 			id: "start-review",
 			name: "Start today's review",
@@ -920,7 +920,8 @@ export default class RecallLabPlugin extends Plugin {
 	}
 
 	async loadSettings(): Promise<void> {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		const saved = (await this.loadData()) as Partial<RecallLabSettings> | null;
+		this.settings = { ...DEFAULT_SETTINGS, ...saved };
 	}
 
 	async saveSettings(): Promise<void> {
