@@ -4,7 +4,10 @@ Every release of Recall Lab. Versions follow the plugin's manifest, and each
 release is tagged with the bare version (`0.4.0`), as Obsidian expects. The
 release workflow publishes a version's section below as its release notes.
 
-## [0.6.1] - 2026-10-19
+Changes land under **Unreleased** as they are merged. A release gathers them up
+and gives them a version, about once a month — not once per change.
+
+## [Unreleased]
 
 ### Fixed
 
@@ -232,7 +235,7 @@ text, shell commands and image answers), marked instantly or by Claude through
 the Claude Code CLI; CTF-style hands-on labs with hashed flags; a skill radar
 per course; and a full answer history.
 
-[0.6.1]: https://github.com/MYounas126/recall-lab/releases/tag/0.6.1
+[Unreleased]: https://github.com/MYounas126/recall-lab/compare/0.6.0...HEAD
 [0.6.0]: https://github.com/MYounas126/recall-lab/releases/tag/0.6.0
 [0.5.2]: https://github.com/MYounas126/recall-lab/releases/tag/0.5.2
 [0.5.1]: https://github.com/MYounas126/recall-lab/releases/tag/0.5.1

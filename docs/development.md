@@ -96,13 +96,36 @@ A second CI job audits dependencies. A security advisory in a package that ships
 
 ## Releasing
 
+**A release gathers up a month's work. It is not one per change.**
+
+Every release reaches everyone who has the plugin installed: Obsidian offers it
+as an update, and the community directory re-scans the repository. A string of
+small releases is noise for them and buries what actually changed. So merged
+work waits on `main` until a release is cut.
+
+**While you are working**, a pull request:
+
+- adds its entry to the **`## [Unreleased]`** section of `CHANGELOG.md`;
+- leaves `package.json`, `manifest.json` and `versions.json` alone.
+
+`main` therefore sits at the last released version, with the changes since it
+described under Unreleased. To run them before the release, build and copy the
+files into a vault yourself.
+
+**When it is time to release**, about once a month, or sooner for something
+badly broken:
+
 ```bash
-# 1. Add a "## [0.5.0] - <date>" section to CHANGELOG.md and commit it.
-# 2. Bump package.json, manifest.json and versions.json, commit, and tag 0.5.0:
-npm version 0.5.0
+# 1. In CHANGELOG.md, change "## [Unreleased]" to "## [0.7.0] - <date>" and
+#    add a fresh, empty Unreleased section above it. Commit.
+# 2. Bump package.json, manifest.json and versions.json, commit, and tag 0.7.0:
+npm version 0.7.0
 # 3. Publish:
-git push && git push origin 0.5.0
+git push && git push origin 0.7.0
 ```
+
+Pick the number from what accumulated: a patch for fixes only, a minor for new
+features, as [semantic versioning](https://semver.org) has it.
 
 Pushing the tag runs `release.yml`, which does the following:
 
