@@ -4,6 +4,33 @@ Every release of Recall Lab. Versions follow the plugin's manifest, and each
 release is tagged with the bare version (`0.4.0`), as Obsidian expects. The
 release workflow publishes a version's section below as its release notes.
 
+## [0.6.0] - 2026-10-19
+
+### Added
+
+- **Binary challenges.** A lab can now be a compiled, stripped x86-64 Linux
+  program that you reverse with your own tools, rather than a source file you
+  read. Build one from a course's Labs panel or with **Build a binary challenge
+  from this note**, and pick a difficulty:
+  - *Easy* traces one mechanism — partial-register writes, extension rules,
+    endianness, a table lookup.
+  - *Hard* is a transformation to invert, or control flow to untangle.
+  - *Brutal* has several stages, such as a bytecode interpreter running an
+    embedded program.
+
+  The challenge is built from the note's own subject matter, so it tests what
+  your course covers. Recall Lab compiles it and runs it once on the input
+  that should solve it, and throws it away unless that input prints the flag
+  and the flag cannot be read out of the binary with `strings` — which is why
+  a password compared against a stored string never survives. The binary is
+  left in `~/RecallLab/labs/`, ready to copy wherever you work. Its source is
+  kept but hidden until you solve it or give up.
+
+  Building happens inside a throwaway x86-64 Linux container with no network,
+  a read-only system and no privileges. Nothing is compiled or run on your
+  machine, and Docker is only ever used if you ask for a binary challenge.
+  **Settings → Recall Lab → Binary challenges** has a Test button.
+
 ## [0.5.2] - 2026-10-19
 
 ### Fixed
@@ -191,6 +218,7 @@ text, shell commands and image answers), marked instantly or by Claude through
 the Claude Code CLI; CTF-style hands-on labs with hashed flags; a skill radar
 per course; and a full answer history.
 
+[0.6.0]: https://github.com/MYounas126/recall-lab/releases/tag/0.6.0
 [0.5.2]: https://github.com/MYounas126/recall-lab/releases/tag/0.5.2
 [0.5.1]: https://github.com/MYounas126/recall-lab/releases/tag/0.5.1
 [0.5.0]: https://github.com/MYounas126/recall-lab/releases/tag/0.5.0

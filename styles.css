@@ -736,3 +736,11 @@
 /* On the results page: the tiers a session opened, or what the next one needs. */
 .rl-gate-row { display: flex; align-items: center; gap: 0.5rem; }
 .rl-gate-row + .rl-gate-row { margin-top: 0.35rem; }
+
+/* Picking the note a binary challenge is built from. */
+.rl-pick-row {
+	padding: 0.35rem 0.5rem; border-radius: 6px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+.rl-pick-row:last-child { border-bottom: none; }
+.rl-pick-row:hover { background: var(--background-modifier-hover); }

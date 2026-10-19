@@ -200,6 +200,30 @@ export class LabStore {
 		return labs.filter((l) => l.note === notePath);
 	}
 
+	/** A scratch directory for one build, under the workspace so Docker can mount it. */
+	buildScratch(): string {
+		const root = path.join(this.workspace().replace(/^~(?=$|\/)/, os.homedir()), ".build");
+		fs.mkdirSync(root, { recursive: true });
+		return fs.mkdtempSync(path.join(root, "c-"));
+	}
+
+	/**
+	 * Puts a built challenge where you can pick it up, with a brief beside it.
+	 * The source is not written: the binary is the challenge.
+	 */
+	placeBinary(lab: Lab, builtFile: string, brief: string): string {
+		const dir = this.dir(lab);
+		fs.mkdirSync(dir, { recursive: true });
+		const target = path.join(dir, lab.build!.output);
+		if (!path.resolve(target).startsWith(path.resolve(dir) + path.sep)) {
+			throw new Error(`refusing to write outside the lab directory: ${lab.build!.output}`);
+		}
+		fs.copyFileSync(builtFile, target);
+		fs.chmodSync(target, 0o755);
+		fs.writeFileSync(path.join(dir, "BRIEF.md"), brief, "utf8");
+		return dir;
+	}
+
 	/** Absolute path of a lab's workspace directory. */
 	dir(lab: Lab): string {
 		const root = this.workspace().replace(/^~(?=$|\/)/, os.homedir());

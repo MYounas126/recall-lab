@@ -42,6 +42,10 @@ export interface RecallLabSettings {
 	blurtMinutes: number;
 	/** Questions the student may ask in "teach it back" before it is scored. */
 	teachQuestions: number;
+	/** The docker command for building challenges; blank finds it. */
+	ctfDocker: string;
+	/** A docker context, such as colima-ctf; blank uses the current one. */
+	ctfContext: string;
 }
 
 export const DEFAULT_SETTINGS: RecallLabSettings = {
@@ -67,6 +71,8 @@ export const DEFAULT_SETTINGS: RecallLabSettings = {
 	secondTry: true,
 	blurtMinutes: 3,
 	teachQuestions: 3,
+	ctfDocker: "",
+	ctfContext: "",
 };
 
 export class RecallLabSettingTab extends PluginSettingTab {
@@ -364,6 +370,52 @@ export class RecallLabSettingTab extends PluginSettingTab {
 						this.plugin.settings.defaultLength = v;
 						await this.plugin.saveSettings();
 					})
+			);
+
+		new Setting(containerEl).setName("Binary challenges").setHeading();
+
+		new Setting(containerEl)
+			.setName("Docker command")
+			.setDesc(
+				"Challenges are compiled and checked inside a throwaway x86-64 Linux container, never on your " +
+					"machine. Leave blank to find Docker automatically."
+			)
+			.addText((t) =>
+				t.setPlaceholder("/opt/homebrew/bin/docker")
+					.setValue(this.plugin.settings.ctfDocker)
+					.onChange(async (v) => {
+						this.plugin.settings.ctfDocker = v.trim();
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Docker context")
+			.setDesc("Which Docker to use, if you keep more than one. Blank uses the current context.")
+			.addText((t) =>
+				t.setPlaceholder("colima-ctf")
+					.setValue(this.plugin.settings.ctfContext)
+					.onChange(async (v) => {
+						this.plugin.settings.ctfContext = v.trim();
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Check the builder")
+			.setDesc("Confirms Docker answers and the builder image is ready.")
+			.addButton((b) =>
+				b.setButtonText("Test").onClick(async () => {
+					b.setDisabled(true).setButtonText("Testing…");
+					try {
+						const s = await this.plugin.sandbox.status();
+						if (!s.ok) new Notice(`Recall Lab: ${s.error}`, 15000);
+						else if (!s.builder) new Notice(`Docker ${s.server} is up. The builder image is not built yet; it is built the first time you ask for a challenge.`, 15000);
+						else new Notice(`Docker ${s.server} is up, and the builder image is ready.`, 9000);
+					} finally {
+						b.setDisabled(false).setButtonText("Test");
+					}
+				})
 			);
 
 		new Setting(containerEl).setName("Folders").setHeading();

@@ -4,9 +4,10 @@ import { Store } from "./store";
 import { ClaudeCli } from "./claude";
 import { Tasks } from "./tasks";
 import { LabStore, hintsNeedShortening } from "./labs";
+import { Sandbox } from "./sandbox";
 import { Log } from "./log";
-import { ConfirmModal, RecallLabView, VIEW_TYPE_RECALL } from "./view";
-import { Bank, Course, Lab, Question } from "./types";
+import { ChallengeModal, ConfirmModal, RecallLabView, VIEW_TYPE_RECALL } from "./view";
+import { Bank, Course, Lab, Question, Tier } from "./types";
 import { needingVariants } from "./variants";
 import { needingSteps } from "./guided";
 import { Leech } from "./leeches";
@@ -39,6 +40,7 @@ export default class RecallLabPlugin extends Plugin {
 	private bulkRun: { cancelled: boolean } | null = null;
 	tasks!: Tasks;
 	labs!: LabStore;
+	sandbox!: Sandbox;
 	/**
 	 * Quiz, lab and course builds run one at a time, in the order asked for.
 	 * Each is a Claude CLI process that can take minutes, so ten clicks must
@@ -69,6 +71,7 @@ export default class RecallLabPlugin extends Plugin {
 		this.cli.onLog = (level, msg, extra) =>
 			level === "error" ? this.log.error(msg, extra) : this.log.info(msg, extra);
 		this.log.info("plugin loaded", { version: this.manifest.version, model: this.settings.model });
+		this.sandbox = new Sandbox(() => ({ docker: this.settings.ctfDocker, context: this.settings.ctfContext }));
 		this.tasks = new Tasks(
 			this.app,
 			this.cli,
@@ -76,7 +79,9 @@ export default class RecallLabPlugin extends Plugin {
 			() => this.settings.strictness,
 			() => this.settings.banksFolder,
 			() => this.settings.coursesFolder,
-			() => this.settings.labsFolder
+			() => this.settings.labsFolder,
+			this.sandbox,
+			this.labs
 		);
 
 		this.registerView(VIEW_TYPE_RECALL, (leaf: WorkspaceLeaf) => new RecallLabView(leaf, this));
@@ -152,6 +157,17 @@ export default class RecallLabPlugin extends Plugin {
 		this.addCommand({ id: "remove-leftovers", name: "Remove leftover quizzes, labs and courses", callback: () => void this.removeLeftovers() });
 		this.addCommand({ id: "write-variants", name: "Write variants for mature questions", callback: () => void this.offerVariants() });
 		this.addCommand({ id: "write-steps", name: "Write guided steps for brutal problems", callback: () => void this.offerSteps() });
+		this.addCommand({
+			id: "build-challenge",
+			name: "Build a binary challenge from this note",
+			checkCallback: (checking) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file || file.extension !== "md") return false;
+				if (checking) return true;
+				void this.offerChallenge(file.path);
+				return true;
+			},
+		});
 		this.addCommand({ id: "shorten-lab-hints", name: "Shorten lab hints to CTF-style nudges", callback: () => void this.offerHintRewrite() });
 
 		// The "Complete" footer at the bottom of every note inside a course folder.
@@ -552,6 +568,92 @@ export default class RecallLabPlugin extends Plugin {
 		new Notice(`Wrote ${res.length} lab${res.length === 1 ? "" : "s"} for "${name}"${short}.`, 9000);
 		await this.refreshView();
 		return res.length;
+	}
+
+	/** Compiles a challenge again when its binary has gone from disk. */
+	async rebuildChallenge(lab: Lab): Promise<boolean> {
+		const notice = new Notice(`Rebuilding "${lab.title}"…`, 0);
+		try {
+			const res = await this.tasks.rebuildCrackme(lab);
+			if (typeof res !== "string") {
+				this.log.error("challenge rebuild failed", { lab: lab.id, error: res.error });
+				new Notice(`Could not rebuild it: ${res.error}`, 15000);
+				return false;
+			}
+			this.log.info("challenge rebuilt", { lab: lab.id, dir: res });
+			new Notice(`Rebuilt into ${res}`, 9000);
+			return true;
+		} finally {
+			notice.hide();
+		}
+	}
+
+	/** Asks how hard the challenge should be, then builds it. */
+	async offerChallenge(notePath: string): Promise<void> {
+		const name = notePath.split("/").pop()!.replace(/\.md$/, "");
+		new ChallengeModal(this.app, name, (tier) => void this.buildChallenge(notePath, tier)).open();
+	}
+
+	/**
+	 * Writes one binary challenge for a note: a compiled x86-64 program to
+	 * reverse, the way a CTF hands you one. Claude designs it, the sandbox
+	 * builds it and proves the intended input really produces the flag, and
+	 * the finished program is left where you can pick it up.
+	 */
+	async buildChallenge(notePath: string, tier: Tier): Promise<Lab | null> {
+		const courses = await this.store.listCourses();
+		const course = courses.find((c) => notePath.startsWith(c.folder.replace(/\/+$/, "") + "/"));
+		if (!course) { new Notice("That note is not inside a course folder."); return null; }
+
+		const status = await this.sandbox.status();
+		if (!status.ok) {
+			new Notice(
+				`Recall Lab builds challenges inside Docker, and ${status.error}. Start Docker, then try again. ` +
+					"Settings → Recall Lab → Binary challenges has a Test button.",
+				20000
+			);
+			return null;
+		}
+		if (!status.builder) {
+			const notice = new Notice("Building the challenge builder image. This happens once and takes a few minutes…", 0);
+			try {
+				const built = await this.sandbox.buildImage(this.labs.buildScratch());
+				if (built.code !== 0) {
+					this.log.error("builder image failed", { error: (built.stderr || built.stdout).slice(-400) });
+					new Notice(`Could not build the challenge builder: ${(built.stderr || built.stdout).trim().split("\n").pop()?.slice(0, 200)}`, 20000);
+					return null;
+				}
+				this.log.info("builder image built");
+			} finally {
+				notice.hide();
+			}
+		}
+
+		const name = notePath.split("/").pop()!.replace(/\.md$/, "");
+		// Something different each time: the titles already written for this note.
+		const avoid = (await this.labs.list())
+			.filter((l) => l.note === notePath && l.kind === "binary")
+			.map((l) => l.title);
+		const res = await this.build(`ctf:${notePath}:${tier}`, `a ${tier} challenge for "${name}"`, async () => {
+			this.log.info("building a challenge", { note: notePath, tier });
+			const notice = new Notice(`Writing a ${tier} challenge for "${name}"… this takes a few minutes.`, 0);
+			try {
+				return await this.tasks.generateCrackme(notePath, course, tier, avoid);
+			} finally {
+				notice.hide();
+			}
+		});
+		if (!res) return null;
+
+		if ("error" in res) {
+			this.log.error("challenge build failed", { note: notePath, tier, error: res.error });
+			new Notice(`Could not write that challenge: ${res.error}`, 20000);
+			return null;
+		}
+		this.log.info("challenge built", { note: notePath, tier, lab: res.id, title: res.title });
+		new Notice(`"${res.title}" is ready. The binary is in ${this.labs.dir(res)}`, 12000);
+		await this.refreshView();
+		return res;
 	}
 
 	/** Builds every missing quiz in a course, one note at a time. */
