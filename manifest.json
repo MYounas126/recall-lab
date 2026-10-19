@@ -1,9 +1,9 @@
 {
   "id": "recall-lab",
   "name": "Recall Lab",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "minAppVersion": "1.5.0",
-  "description": "Tiered exams over your notes with a skill radar, marked and written by Claude automatically \u2014 no API key.",
+  "description": "Spaced-repetition reviews, tiered exams, CTF-style labs and a skill radar over your notes, marked and written by Claude through the Claude Code CLI. No API key.",
   "author": "Younas Janas",
   "isDesktopOnly": true
 }

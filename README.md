@@ -1,8 +1,24 @@
 # Recall Lab
 
-An Obsidian plugin for tiered, graded exams over your own notes — multiple
-choice, select-all, free text, shell commands and image answers — with
-CTF-style hands-on labs, a skill radar per course, and a full answer history.
+[![CI](https://github.com/MYounas126/recall-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/MYounas126/recall-lab/actions/workflows/ci.yml)
+[![Release](https://github.com/MYounas126/recall-lab/actions/workflows/release.yml/badge.svg)](https://github.com/MYounas126/recall-lab/releases)
+
+An Obsidian plugin that turns your notes into long-term memory: tiered, graded
+exams over your own notes — multiple choice, select-all, free text, shell
+commands, image answers and hands-on question types — a spaced-repetition
+daily review, CTF-style labs, a skill radar per course, and a full answer
+history.
+
+- **Daily review** run by FSRS, the questions you are closest to forgetting first.
+- **Memory on the notes**: a dot on each heading, a due count in each note's
+  footer and in the status bar.
+- **More than picking an option**: recall before recognition, click the bug,
+  register traces, ordering, matching, your own highlights as blanks, variants,
+  guided steps, a second try, *write it all down* and *teach it back*.
+- **Labs**: one source file, a hidden flag, and CTF-style hints of a few words.
+- **A leech clinic** for the questions you keep missing.
+
+See [CHANGELOG.md](CHANGELOG.md) for what each release added.
 
 **It holds no API key.** Multiple choice and select-all are marked instantly
 and offline inside the plugin. Everything that needs judgement — marking
@@ -23,17 +39,21 @@ itself and waits for the reply, so there is nothing for you to type or run.
 
 ## Install
 
-1. Quit Obsidian.
-2. Copy the folder `recall-lab` from `~/Downloads/recall-lab-install/` into
-   your vault's plugins folder:
+1. Download `main.js`, `manifest.json` and `styles.css` from the
+   [latest release](https://github.com/MYounas126/recall-lab/releases/latest),
+   or its `recall-lab-<version>.zip`, which holds them in a `recall-lab` folder.
+   `SHA256SUMS.txt` lists each file's checksum.
+2. Quit Obsidian and put the three files in your vault's plugins folder:
 
    `<vault>/.obsidian/plugins/recall-lab/`
 
-   It must contain `main.js`, `manifest.json` and `styles.css` directly — not a
-   nested folder.
+   They must sit directly in that folder, not in a nested one.
 3. Start Obsidian → **Settings → Community plugins** → enable **Recall Lab**.
    (Community plugins must not be in restricted/safe mode.)
 4. Click the graduation-cap ribbon icon, or run **Recall Lab: Open Recall Lab**.
+
+To update, replace the three files with a newer release's and reload Obsidian.
+Your quizzes, labs and history live in the vault and are kept.
 
 ## How marking works
 
@@ -47,8 +67,8 @@ itself and waits for the reply, so there is nothing for you to type or run.
 
 An open answer is marked in place: the model answer shows while Claude marks,
 then the score, the feedback and any rubric points you missed. If Claude cannot
-be reached, the answer is recorded as 0 with the reason, so an exam never
-stalls. **Strictness** (lenient, normal or brutal) is set in settings and
+be reached, the answer is kept with the reason, so an exam never stalls, but it
+never counts against you: it is left out of your scores and your schedule. **Strictness** (lenient, normal or brutal) is set in settings and
 written into every marking request.
 
 **Second try.** When Claude marks a written answer as not right, it also asks
@@ -192,7 +212,7 @@ sentences containing `{`, `}` or `|` are left alone.
 | `_quiz/courses/*.json` | Course definitions: the folder each one covers and its skill areas. |
 | `_quiz/banks/*.json` | Question banks, one per note. |
 | `_quiz/labs/*.json` | Labs, with each flag stored only as a hash. |
-| `_quiz/progress/attempts.json` | Every answer, score and piece of feedback; every exam; notes marked complete; lab progress. |
+| `_quiz/progress/attempts.json` | Every answer, score and piece of feedback; every exam; notes marked complete; lab progress; finished days for the streak; write-it-down and teach-it-back results; leech diagnoses. It is never overwritten if it cannot be read. |
 | `_quiz/progress/recall-lab.log` | A plain-text log of the last 400 events, for when something goes wrong. |
 
 A lab you choose to write out — to compile or run it yourself — goes to
@@ -256,8 +276,8 @@ The hands-on types carry their own fields:
 | Type | Fields |
 |---|---|
 | `hotspot` | `code`, and `lines`: the 1-based answer line(s). |
-| `trace` | `code`, and `trace`: `[{"line": 2, "expect": {"eax": "0x11", "ZF": "0"}}]`. Answers may be decimal, `0x…`, `…h` or `0b…`; flags may be `0`/`1` or `set`/`clear`. |
-| `order` | `items`, in the correct order. Shown shuffled; scored by the longest stretch you had in the right order. |
+| `trace` | `code`, and `trace`: `[{"line": 2, "expect": {"eax": "0x11", "ZF": "0"}}]`. Answers may be decimal, `0x…`, `…h` or `0b…`; flags may be `0`/`1` or `set`/`clear`. A negative value is read at the named register's width (`-1` is `0xFFFFFFFF` in `eax` but not in `rax`). |
+| `order` | `items`, in the correct order. Shown shuffled; scored by how much you improved on the shuffle (the longest stretch in the right order), so an untouched list scores nothing. |
 | `match` | `pairs`: `[["left", "right"], …]`, every right side different. |
 | `cloze` | `cloze`: text with `{{answer}}` or `{{answer\|alternative}}` blanks. |
 
@@ -268,7 +288,53 @@ the whole quiz.
 
 ```bash
 npm install
-npm run dev     # watch
-npm run build   # typecheck + minified main.js
+npm run dev     # rebuild main.js on every change
+npm run build   # type-check, then a minified production main.js
 npm test        # unit tests, run under Node with a stand-in for Obsidian
+npm run check   # manifest.json, package.json and versions.json agree
 ```
+
+`src/` holds the plugin: `main.ts` wires it into Obsidian, `view.ts` draws the
+Recall Lab pane, `tasks.ts` holds every prompt sent to Claude and checks what
+comes back, `memory.ts` runs the FSRS schedule, and the rest each own one
+feature (`labs.ts`, `highlights.ts`, `blurt.ts`, `teach.ts`, `leeches.ts`, …).
+Tests live in `test/`; `test/run.mjs` bundles each one with esbuild, swapping
+`obsidian` for `test/obsidian-shim.ts`, and runs it with Node's test runner.
+
+### Continuous integration
+
+[`ci.yml`](.github/workflows/ci.yml) runs on every push to `main` and every
+pull request, on Node 20 and 22: it installs exactly what `package-lock.json`
+locks, type-checks, runs the tests, makes the production build and checks the
+manifest. The run's summary shows the bundle's size, and the built plugin is
+kept as an artifact for 14 days, so any commit can be tried in a vault. A
+second job audits dependencies: an advisory in what ships inside `main.js`
+fails the run, one in build tooling only warns.
+
+[Dependabot](.github/dependabot.yml) opens weekly pull requests for the build
+tooling and the workflows' actions. `ts-fsrs` is pinned, since it computes
+every review schedule; new versions of it are left to a deliberate change.
+
+Pull requests are also reviewed by Claude
+([`claude-code-review.yml`](.github/workflows/claude-code-review.yml)), except
+drafts and Dependabot's, and mentioning `@claude` in an issue or a review
+comment asks it for help ([`claude.yml`](.github/workflows/claude.yml)). Both
+need the `CLAUDE_CODE_OAUTH_TOKEN` secret and use your Claude plan.
+
+### Releasing
+
+```bash
+# 1. Add a "## [0.5.0] - <date>" section to CHANGELOG.md and commit it.
+# 2. Bump package.json, manifest.json and versions.json, commit, and tag 0.5.0:
+npm version 0.5.0
+# 3. Publish:
+git push && git push origin 0.5.0
+```
+
+Pushing the tag runs [`release.yml`](.github/workflows/release.yml): it
+type-checks, tests and builds that exact commit, refuses a tag that does not
+match `manifest.json`, and publishes a GitHub release with `main.js`,
+`manifest.json`, `styles.css`, a zip of the plugin folder and their SHA-256
+checksums. The release notes are the version's section of `CHANGELOG.md`.
+Tags are the bare version, as Obsidian expects (`0.5.0`, not `v0.5.0`); a tag
+with a suffix such as `0.5.0-beta.1` is published as a pre-release.

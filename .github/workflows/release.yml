@@ -1,0 +1,96 @@
+# Continuous delivery: pushing a version tag builds, tests and publishes a
+# GitHub release with the three files Obsidian installs from (main.js,
+# manifest.json, styles.css), a zip of the plugin folder and checksums. The
+# release notes are that version's section of CHANGELOG.md.
+#
+# To release:  add a "## [0.5.0]" section to CHANGELOG.md and commit it, then
+#              npm version 0.5.0   (bumps package.json, manifest.json and
+#                                   versions.json, commits, tags 0.5.0)
+#              git push && git push origin 0.5.0
+#
+# Tags are the bare version, as Obsidian expects: 0.5.0, not v0.5.0. A tag with
+# a suffix (0.5.0-beta.1) is published as a pre-release. Running the workflow by
+# hand with an existing tag rebuilds and re-uploads that release.
+name: Release
+
+on:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+      - "[0-9]+.[0-9]+.[0-9]+-*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and publish, e.g. 0.4.0
+        required: true
+        type: string
+
+# Never two runs for the same release at once.
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish ${{ inputs.tag || github.ref_name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.TAG }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies (exactly as locked)
+        run: npm ci --no-audit --no-fund
+
+      - name: Type-check
+        run: npx tsc -noEmit -skipLibCheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Production build
+        run: node esbuild.config.mjs production
+
+      - name: Check the tag matches the plugin's version
+        run: node scripts/check-release.mjs --tag "$TAG" --built
+
+      - name: Package
+        run: |
+          mkdir -p dist/recall-lab
+          cp main.js manifest.json styles.css dist/
+          cp main.js manifest.json styles.css dist/recall-lab/
+          (cd dist && zip -qr "recall-lab-$TAG.zip" recall-lab && rm -r recall-lab)
+          (cd dist && sha256sum main.js manifest.json styles.css "recall-lab-$TAG.zip" > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+
+      - name: Release notes from CHANGELOG.md
+        run: node scripts/release-notes.mjs "$TAG" > dist/NOTES.md
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files=(dist/main.js dist/manifest.json dist/styles.css "dist/recall-lab-$TAG.zip" dist/SHA256SUMS.txt)
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "${files[@]}" --clobber
+            gh release edit "$TAG" --title "Recall Lab $TAG" --notes-file dist/NOTES.md
+          else
+            pre=()
+            if [[ "$TAG" == *-* ]]; then pre=(--prerelease); fi
+            gh release create "$TAG" "${files[@]}" --verify-tag "${pre[@]}" \
+              --title "Recall Lab $TAG" --notes-file dist/NOTES.md
+          fi
+          echo "Published https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"

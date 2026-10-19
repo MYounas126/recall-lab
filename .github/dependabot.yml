@@ -1,0 +1,29 @@
+# Weekly pull requests to keep the build tooling and the workflows' actions
+# current. Each lands through CI like any other change.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # Build tooling moves together; one PR a week rather than one per package.
+      tooling:
+        dependency-type: development
+        update-types: [minor, patch]
+    ignore:
+      # ts-fsrs is pinned: it computes every review schedule, and a new major
+      # version is a change to review on its own, with the tests that pin it.
+      - dependency-name: ts-fsrs
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
