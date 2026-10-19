@@ -27,6 +27,15 @@ test("the prompt asks for the note's own subject matter, and rules out a passwor
 	assert.match(p, /RCX, RDX, R8, R9\./, "the note itself");
 });
 
+test("the prompt says no tools are available, and how to encode without them", () => {
+	// The generator runs with no shell: it cannot precompute a table of bytes.
+	const p = crackmePrompt("N", "c", course, "brutal", []);
+	assert.match(p, /YOU CANNOT RUN ANYTHING while you write this/);
+	assert.match(p, /LET THE COMPILER DO THE ARITHMETIC/);
+	assert.match(p, /'f'\^0x5a/, "the technique, shown");
+	assert.match(p, /must come out of the INPUT somewhere/);
+});
+
 test("each tier asks for a different kind of work, and repeats are steered away from", () => {
 	const of = (tier: "easy" | "hard" | "brutal", avoid: string[] = []) => crackmePrompt("N", "c", course, tier, avoid);
 	assert.match(of("easy"), /EASY — one mechanism/);

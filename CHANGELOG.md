@@ -4,6 +4,20 @@ Every release of Recall Lab. Versions follow the plugin's manifest, and each
 release is tagged with the bare version (`0.4.0`), as Obsidian expects. The
 release workflow publishes a version's section below as its release notes.
 
+## [0.6.1] - 2026-10-19
+
+### Fixed
+
+- **A hard or brutal binary challenge could come back as prose instead of a
+  challenge.** Designing one of these means encoding a payload — a key
+  schedule, a bytecode program — and Claude would try to run Python to work
+  the bytes out, be refused by its own sandbox, and give up. It is now told
+  that it cannot run anything, and shown the way round it: write the encoded
+  data as constant expressions over the characters themselves
+  (`{ 'f'^0x5a, 'l'^0x5a, ... }`) and let the compiler do the arithmetic. The
+  binary still holds only the encoded bytes, so there is nothing to read with
+  `strings`.
+
 ## [0.6.0] - 2026-10-19
 
 ### Added
@@ -218,6 +232,7 @@ text, shell commands and image answers), marked instantly or by Claude through
 the Claude Code CLI; CTF-style hands-on labs with hashed flags; a skill radar
 per course; and a full answer history.
 
+[0.6.1]: https://github.com/MYounas126/recall-lab/releases/tag/0.6.1
 [0.6.0]: https://github.com/MYounas126/recall-lab/releases/tag/0.6.0
 [0.5.2]: https://github.com/MYounas126/recall-lab/releases/tag/0.5.2
 [0.5.1]: https://github.com/MYounas126/recall-lab/releases/tag/0.5.1
