@@ -144,4 +144,4 @@ To update, replace the three files and reload Obsidian. Your quizzes, labs and h
 
 ## License
 
-[MIT](LICENSE) © 2026 Younas Janas
+[MIT](LICENSE) © 2026 Muhammad Younas - https://r00tlv.me/
