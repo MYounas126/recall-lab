@@ -1,9 +1,9 @@
 {
   "id": "recall-lab",
   "name": "Recall Lab",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "minAppVersion": "1.5.0",
-  "description": "Tiered exams over your notes with a skill radar, marked and written by Claude automatically \u2014 no API key.",
+  "description": "Tiered exams over your notes with a skill radar, marked and written by Claude automatically — no API key.",
   "author": "Younas Janas",
   "isDesktopOnly": true
 }

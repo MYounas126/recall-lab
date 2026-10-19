@@ -12,11 +12,10 @@ on:
 
 jobs:
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
+    # Not on drafts (they are not ready to review) or on Dependabot's PRs:
+    # those get no access to repository secrets, so the review could only fail,
+    # and a version bump is CI's to check.
+    if: github.event.pull_request.draft == false && github.event.pull_request.user.type != 'Bot'
 
     runs-on: ubuntu-latest
     permissions:
