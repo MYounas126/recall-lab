@@ -8,6 +8,15 @@ export function hashText(s: string): string {
 	return h.toString(16).padStart(8, "0");
 }
 
+/**
+ * Text from a value parsed out of Claude's JSON: a string as it is, a number
+ * or boolean written out, and anything else (an object, a list) as nothing,
+ * never "[object Object]".
+ */
+export function textOf(v: unknown): string {
+	return typeof v === "string" ? v : typeof v === "number" || typeof v === "boolean" ? String(v) : "";
+}
+
 /** Fisher-Yates, on a copy. */
 export function shuffled<T>(arr: T[]): T[] {
 	const out = arr.slice();

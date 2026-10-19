@@ -182,9 +182,14 @@ export class Store {
 	private async readStrict(): Promise<ProgressFile> {
 		const file = this.vault.getAbstractFileByPath(this.progressPath());
 		if (!(file instanceof TFile)) return freshProgress();
+		return this.parseProgress(await this.vault.read(file));
+	}
+
+	/** attempts.json's text as progress, or an error if it cannot be read. */
+	private parseProgress(text: string): ProgressFile {
 		let parsed: Partial<ProgressFile>;
 		try {
-			parsed = JSON.parse(await this.vault.read(file)) as Partial<ProgressFile>;
+			parsed = JSON.parse(text) as Partial<ProgressFile>;
 		} catch (e) {
 			throw new Error(`${this.progressPath()} could not be read, so Recall Lab left it untouched instead of overwriting it (${String(e)})`);
 		}
@@ -201,32 +206,39 @@ export class Store {
 		};
 	}
 
-	private async writeProgress(data: ProgressFile): Promise<void> {
-		await this.ensureFolder(this.progressFolder());
-		const path = this.progressPath();
-		const body = JSON.stringify(data, null, 2);
-		const file = this.vault.getAbstractFileByPath(path);
-		if (file instanceof TFile) await this.vault.modify(file, body);
-		else await this.vault.create(path, body);
-	}
-
 	/**
-	 * Reads attempts.json, applies one change and writes it back. Each change
-	 * awaits between its read and its write, so two run side by side would read
-	 * the same snapshot and the later write would silently drop the earlier
-	 * change — coaching landing while a lab is solved, say. The queue runs them
-	 * one at a time. A change that returns false skips the write.
+	 * Reads attempts.json, applies one change and writes it back. The queue
+	 * runs changes one at a time: two side by side would read the same
+	 * snapshot, and the later write would silently drop the earlier change
+	 * (coaching landing while a lab is solved, say). Each change is read and
+	 * written in one step through Vault.process, so nothing else, such as a
+	 * sync, can write in between. A change that returns false skips the
+	 * write, and a file that cannot be read is never written.
 	 */
 	private update(change: (data: ProgressFile) => boolean | void): Promise<ProgressFile> {
 		return this.writes.run(async () => {
-			let data: ProgressFile;
+			const file = this.vault.getAbstractFileByPath(this.progressPath());
+			if (!(file instanceof TFile)) {
+				// The very first change: there is nothing to read yet.
+				const data = freshProgress();
+				if (change(data) !== false) {
+					await this.ensureFolder(this.progressFolder());
+					await this.vault.create(this.progressPath(), JSON.stringify(data, null, 2));
+				}
+				return data;
+			}
+			let data = freshProgress();
 			try {
-				data = await this.readStrict();
+				await this.vault.process(file, (text) => {
+					data = this.parseProgress(text);
+					if (change(data) === false) throw new Unchanged();
+					return JSON.stringify(data, null, 2);
+				});
 			} catch (e) {
+				if (e instanceof Unchanged) return data;
 				new Notice(`Recall Lab: ${(e as Error).message}. Your last change was not saved.`, 15000);
 				throw e;
 			}
-			if (change(data) !== false) await this.writeProgress(data);
 			return data;
 		});
 	}
@@ -424,6 +436,9 @@ export class Store {
  * share its `completed` and `labs` maps, so the first write into one would
  * leak into every later "empty" read.
  */
+/** Thrown inside Vault.process to leave the file as it is. */
+class Unchanged extends Error {}
+
 function freshProgress(): ProgressFile {
 	return { ...EMPTY_PROGRESS, attempts: [], sessions: [], completed: {}, labs: {} };
 }

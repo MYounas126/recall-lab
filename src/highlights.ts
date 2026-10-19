@@ -7,6 +7,11 @@ export function highlightBankId(path: string): string {
 	return `hl:${path}`;
 }
 
+/** Whether a bank is a note's highlight questions rather than a quiz. */
+export function isHighlightBank(bankId: string): boolean {
+	return bankId.startsWith("hl:");
+}
+
 /**
  * A highlight as Obsidian draws one: no space just inside either ==, so
  * `a == b` in prose or base64 padding (`a2V5==`) is not a highlight. Run on

@@ -18,6 +18,8 @@ await esbuild.build({
   target: "node20",
   outdir: out,
   alias: { obsidian: "./test/obsidian-shim.ts" },
+  // Loaded from node_modules when a test runs: it is too dynamic to bundle.
+  external: ["jsdom"],
   logLevel: "warning",
 });
 

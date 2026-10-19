@@ -31,7 +31,7 @@ Claude writes them and marks open answers through the Claude Code CLI, so you do
 
 - **A daily review** scheduled by [FSRS](https://github.com/open-spaced-repetition/ts-fsrs). The questions you are closest to forgetting come first, then new ones up to a daily limit.
 - **Exams in three tiers**: easy (recall), hard (application) and brutal (synthesis and hands-on). Claude writes them from each note. Hard unlocks once you own 80% of a note's Easy questions, and Brutal once you own 80% of its Hard ones.
-- **More than multiple choice**: written and shell-command answers, click the bug, register traces, ordering and matching. Your own `==highlights==` also become fill-in-the-blank questions.
+- **More than multiple choice**: written and shell-command answers, click the bug, register traces, ordering and matching. Your own `==highlights==` also become fill-in-the-blank questions, which join your daily review as soon as you write them.
 - **CTF-style labs**: one source file, a hidden flag, and three hints of a few words each.
 - **Memory on your notes**: a dot on each heading that has questions, plus a due count in each note's footer and in the status bar.
 - **A skill radar** for each course and for the whole vault. Each spoke is the score you could expect on that skill area today.
@@ -111,7 +111,7 @@ sequenceDiagram
 ## Requirements
 
 - **Obsidian 1.5 or later**, on desktop.
-- **The Claude Code CLI**, installed and signed in. Recall Lab finds it in the usual install locations. If it doesn't, set **Settings → Recall Lab → Path to the claude binary**, then press **Test** under **Check the connection**.
+- **The Claude Code CLI**, installed and signed in. Recall Lab finds it in the usual install locations. If it doesn't, set **Settings → Recall Lab → Path to the Claude binary**, then press **Test** under **Check the connection**.
 - **macOS or Linux.** Recall Lab is developed and tested on macOS. Windows is untested. It also needs `claude.exe` from Claude Code's native installer; an npm install only provides `claude.cmd`, which Recall Lab can't start.
 
 ## Install
@@ -124,7 +124,7 @@ To update, replace the three files and reload Obsidian. Your quizzes, labs and h
 
 ## Quick start
 
-1. Open Recall Lab with the graduation-cap icon in the ribbon, or run **Recall Lab: Open Recall Lab**.
+1. Open Recall Lab with the graduation-cap icon in the ribbon, or run **Recall Lab: Open view**.
 2. Pick a folder of notes under **Folders** and press **Set up this course**. Claude reads a sample of the notes and names the course's skill areas.
 3. To build a quiz, press **Generate** next to a note. Or press **Complete** at the end of a note you have finished reading.
 4. Press **Exam** to take the quiz. After that, the questions you need appear in **Today's review** on the overview.
@@ -136,12 +136,19 @@ To update, replace the three files and reload Obsidian. Your quizzes, labs and h
 - **[Development](docs/development.md)**: building, testing, CI and how releases are made.
 - **[Changelog](CHANGELOG.md)**: what each release added and fixed.
 
-## Privacy
+## Privacy and disclosures
 
-- Recall Lab keeps everything in your vault, under `_quiz/`. It has no server, no account and no telemetry, and it makes no network requests of its own.
-- Anything that needs judgement runs through your own Claude Code CLI. That means the note or answer involved is sent to Anthropic under your Claude plan. Choice, hands-on and fill-in-the-blank questions are marked on your device.
-- Lab flags are stored only as SHA-256 hashes.
+- **A Claude account and plan.** Writing quizzes, labs and a course's skill areas, and marking written answers, needs Claude. Recall Lab uses the Claude Code CLI on your own subscription. It has no API key of its own and charges nothing.
+
+  Once a quiz exists, the following work without Claude:
+  - its choice, hands-on and fill-in-the-blank questions;
+  - your reviews of them;
+  - the radar and History.
+- **Network use.** Recall Lab makes no network requests of its own. The Claude Code CLI it starts sends the note or answer involved to Anthropic.
+- **Programs it runs.** Recall Lab is desktop only. It starts the `claude` command-line tool. To find it, it checks the usual install locations, then asks your login shell (`command -v claude`).
+- **Files outside the vault.** Everything Recall Lab keeps is in your vault, under `_quiz/`. The one exception is a lab you choose to write to disk, so you can compile or run it yourself: its files go to `~/RecallLab/labs/`. Recall Lab never runs them.
+- **Nothing else.** There is no telemetry, no ads and no Recall Lab account. Lab flags are stored only as SHA-256 hashes.
 
 ## License
 
-[MIT](LICENSE) © 2026 Muhammad Younas - https://r00tlv.me/
+[MIT](LICENSE) © 2026 Muhammad Younas – [r00tlv.me](https://r00tlv.me)

@@ -1,11 +1,11 @@
-import { App, ButtonComponent, Component, ItemView, MarkdownRenderer, Modal, Notice, Platform, WorkspaceLeaf, setIcon } from "obsidian";
+import { App, ButtonComponent, ItemView, MarkdownRenderer, Modal, Notice, Platform, WorkspaceLeaf, setIcon } from "obsidian";
 import type RecallLabPlugin from "./main";
 import { Store } from "./store";
 import { clozeBlanks, clozePieces, gradeLocally, sameValue } from "./grader";
 import { shuffled } from "./util";
 import { QuestionScore, renderRadar, scoreAxes, scoreCourses, weakestTested, untested, withBefore, AxisScore } from "./radar";
 import {
-	Attempt, Bank, BlurtResult, Confidence, Course, ExamItem, Lab, LabProgress, ProgressFile, Question, SessionSummary, Tier,
+	Attempt, Bank, BlurtResult, Confidence, Course, ExamItem, Lab, ProgressFile, Question, SessionSummary, Tier,
 	TeachResult, Turn, idOf, labScore, letterGrade, qkey,
 } from "./types";
 import { AnswerIndex, calibration } from "./history";
@@ -26,6 +26,7 @@ import { blurtExam, missedHeading } from "./blurt";
 import { checkFlag, hashFlag, hintsNeedShortening } from "./labs";
 import { INSTALL_HINT } from "./claude";
 import { Gate, GateRule, gatesOf, isOpen, lockedTiers, opened, tierNames, whyLocked } from "./gates";
+import { isHighlightBank } from "./highlights";
 
 // Rough per-quiz figures for the bulk-generation dialog. Illustrative only:
 // they drift with the model, the note's length and plan pricing, which is why
@@ -473,7 +474,7 @@ export class RecallLabView extends ItemView {
 		plan: ReviewPlan; memory: Memory; keys: Set<string>; progress: ProgressFile; items: ExamItem[]; gates: Map<string, Gate>;
 	}> {
 		const progress = await this.plugin.store.readProgress();
-		const memory = new Memory(progress.attempts, this.plugin.settings.targetRecall / 100);
+		const memory = Memory.of(progress.attempts, this.plugin.settings.targetRecall / 100);
 		const noteOf = new Map(this.everyBank.map((b) => [b.id, b.note]));
 		const items = Store.itemsOf(banks);
 		// New questions wait for their tier to open, advisory gate or not: a
@@ -487,6 +488,7 @@ export class RecallLabView extends ItemView {
 			completed: progress.completed ?? {},
 			noteOf: (id) => noteOf.get(id),
 			isOpen: (it) => isOpen(it, gates),
+			isHighlights: isHighlightBank,
 		});
 		return { plan, memory, keys: keysOf(items), progress, items, gates };
 	}
@@ -1840,7 +1842,12 @@ export class RecallLabView extends ItemView {
 			const preview = el.createDiv({ cls: "rl-preview" });
 			const load = (f: File) => {
 				const reader = new FileReader();
-				reader.onload = () => { state.image = String(reader.result); preview.empty(); preview.createEl("img", { attr: { src: state.image! } }); };
+				reader.onload = () => {
+					const url = typeof reader.result === "string" ? reader.result : "";
+					state.image = url;
+					preview.empty();
+					preview.createEl("img", { attr: { src: url } });
+				};
 				reader.readAsDataURL(f);
 			};
 			file.onchange = () => { const f = file.files?.[0]; if (f) load(f); };
@@ -2348,7 +2355,7 @@ export class RecallLabView extends ItemView {
 		hero.createDiv({ cls: "rl-result-score", text: `${meanScore}%` });
 		const byAi = graded.filter((a) => a.gradedBy === "ai").length;
 		const now = new Date();
-		const memory = new Memory(progress.attempts, this.plugin.settings.targetRecall / 100);
+		const memory = Memory.of(progress.attempts, this.plugin.settings.targetRecall / 100);
 		const tomorrow = memory.forecast(now, 2, keysOf(Store.itemsOf(this.everyBank)))[1];
 		hero.createDiv({
 			cls: "rl-result-sub",
@@ -2458,11 +2465,12 @@ export class RecallLabView extends ItemView {
 			const ph = panel.createDiv({ cls: "rl-panel-head" });
 			ph.createEl("h3", { text: f.path });
 			const copy = new ButtonComponent(ph).setButtonText("Copy");
-			copy.onClick(async () => {
+			const copyFile = async () => {
 				await navigator.clipboard.writeText(f.content);
 				copy.setButtonText("Copied");
-				window.setTimeout(() => copy.setButtonText("Copy"), 1500);
-			});
+				window.setTimeout(() => { copy.setButtonText("Copy"); }, 1500);
+			};
+			copy.onClick(() => void copyFile());
 			const pre = panel.createEl("pre", { cls: "rl-code rl-challenge-code" });
 			pre.createEl("code", { text: f.content });
 		}
@@ -2771,7 +2779,7 @@ export class RecallLabView extends ItemView {
 	}
 
 	private async md(source: string, el: HTMLElement): Promise<void> {
-		await MarkdownRenderer.render(this.app, source, el, "", this as unknown as Component);
+		await MarkdownRenderer.render(this.app, source, el, "", this);
 	}
 }
 
@@ -2812,10 +2820,6 @@ function tierLabel(t: Tier): string {
 }
 
 
-function clamp(n: number): number {
-	if (!Number.isFinite(n)) return 0;
-	return Math.max(0, Math.min(100, Math.round(n)));
-}
 
 /** Short text placed inline, keeping `code` spans and dropping other markdown. */
 function inlineText(parent: HTMLElement, text: string): void {

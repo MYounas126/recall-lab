@@ -1,5 +1,6 @@
 import { spawn } from "child_process";
 import * as os from "os";
+import { textOf } from "./util";
 
 export interface ClaudeReply {
 	ok: boolean;
@@ -135,20 +136,20 @@ export class ClaudeCli {
 
 		let parsed: Record<string, unknown>;
 		try {
-			parsed = JSON.parse(res.stdout);
+			parsed = JSON.parse(res.stdout) as Record<string, unknown>;
 		} catch {
 			const tail = (res.stderr || res.stdout).trim().slice(-400);
 			this.onLog("error", "the CLI did not return JSON", { code: res.code, secs, tail });
 			return { ok: false, text: "", error: tail || `Claude exited with code ${res.code}.` };
 		}
 		if (parsed.is_error) {
-			this.onLog("error", "Claude reported an error", { secs, result: String(parsed.result ?? "") });
-			return { ok: false, text: "", error: String(parsed.result ?? "Claude reported an error.") };
+			this.onLog("error", "Claude reported an error", { secs, result: textOf(parsed.result) });
+			return { ok: false, text: "", error: textOf(parsed.result) || "Claude reported an error." };
 		}
-		this.onLog("info", "Claude replied", { secs, costUsd: parsed.total_cost_usd, chars: String(parsed.result ?? "").length });
+		this.onLog("info", "Claude replied", { secs, costUsd: parsed.total_cost_usd, chars: textOf(parsed.result).length });
 		return {
 			ok: true,
-			text: stripFence(String(parsed.result ?? "")),
+			text: stripFence(textOf(parsed.result)),
 			costUsd: typeof parsed.total_cost_usd === "number" ? parsed.total_cost_usd : undefined,
 		};
 	}
@@ -184,15 +185,15 @@ export class ClaudeCli {
 						...(WINDOWS ? {} : { PATH: `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${process.env.PATH ?? ""}` }),
 					},
 				});
-			} catch (e) { reject(e); return; }
+			} catch (e) { reject(e instanceof Error ? e : new Error(String(e))); return; }
 
 			let stdout = "", stderr = "", timedOut = false;
-			const timer = setTimeout(() => { timedOut = true; child.kill("SIGTERM"); }, timeoutMs);
+			const timer = window.setTimeout(() => { timedOut = true; child.kill("SIGTERM"); }, timeoutMs);
 
-			child.stdout.on("data", (d) => (stdout += d.toString()));
-			child.stderr.on("data", (d) => (stderr += d.toString()));
-			child.on("error", (e) => { clearTimeout(timer); reject(e); });
-			child.on("close", (code) => { clearTimeout(timer); resolve({ code, stdout, stderr, timedOut }); });
+			child.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
+			child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+			child.on("error", (e) => { window.clearTimeout(timer); reject(e); });
+			child.on("close", (code) => { window.clearTimeout(timer); resolve({ code, stdout, stderr, timedOut }); });
 
 			if (stdin) child.stdin.write(stdin);
 			child.stdin.end();

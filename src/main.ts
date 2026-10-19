@@ -83,7 +83,7 @@ export default class RecallLabPlugin extends Plugin {
 		this.addRibbonIcon("graduation-cap", "Recall Lab", () => void this.activate());
 		this.addSettingTab(new RecallLabSettingTab(this.app, this));
 
-		this.addCommand({ id: "open", name: "Open Recall Lab", callback: () => void this.activate() });
+		this.addCommand({ id: "open", name: "Open view", callback: () => void this.activate() });
 		this.addCommand({
 			id: "start-review",
 			name: "Start today's review",
@@ -311,7 +311,7 @@ export default class RecallLabPlugin extends Plugin {
 		// Highlight questions point at headings too, so they colour the dots.
 		const banks = this.settings.highlightClozes ? [...files, ...(await this.store.listHighlightBanks(courses))] : files;
 		const retention = this.settings.targetRecall / 100;
-		const memory = new Memory(progress.attempts, retention);
+		const memory = Memory.of(progress.attempts, retention);
 		const now = new Date();
 		const today = endOfDay(now);
 		return {
@@ -920,7 +920,8 @@ export default class RecallLabPlugin extends Plugin {
 	}
 
 	async loadSettings(): Promise<void> {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		const saved = (await this.loadData()) as Partial<RecallLabSettings> | null;
+		this.settings = { ...DEFAULT_SETTINGS, ...saved };
 	}
 
 	async saveSettings(): Promise<void> {

@@ -1,5 +1,6 @@
 import { headingKey } from "./notemap";
 import { TeachResult, Turn } from "./types";
+import { textOf } from "./util";
 
 /** The conversation so far, as the prompts show it. */
 function transcript(turns: Turn[]): string {
@@ -85,7 +86,7 @@ export function parseTeachScore(data: unknown, sections: string[], note: string,
 	const d = (data ?? {}) as { score?: unknown; feedback?: unknown; covered?: unknown; missed?: unknown };
 	const byKey = new Map(sections.map((s) => [headingKey(s), s]));
 	// A point may come as a string or as {"point": "..."}, in either list.
-	const pointOf = (m: unknown) => (typeof m === "string" ? m : String((m as { point?: unknown })?.point ?? "")).trim();
+	const pointOf = (m: unknown) => (typeof m === "string" ? m : textOf((m as { point?: unknown })?.point)).trim();
 	const covered = Array.isArray(d.covered) ? d.covered.map(pointOf).filter(Boolean) : [];
 	const missed = Array.isArray(d.missed)
 		? d.missed

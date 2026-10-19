@@ -2,6 +2,7 @@ import { AnswerIndex } from "./history";
 import { headingKey, refHeading } from "./notemap";
 import { Store } from "./store";
 import { BlurtResult, ExamItem } from "./types";
+import { textOf } from "./util";
 
 export interface Heading {
 	text: string;
@@ -137,7 +138,7 @@ export function parseBlurt(data: unknown, sections: Section[], note: string, now
 		? d.missed
 			.map((m) => {
 				const section = known((m as { heading?: unknown })?.heading);
-				const point = String((m as { point?: unknown })?.point ?? "").trim();
+				const point = textOf((m as { point?: unknown })?.point).trim();
 				return section ? { heading: section.name, point, link: section.link } : null;
 			})
 			.filter((m): m is { heading: string; point: string; link: string } => m !== null)

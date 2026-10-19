@@ -56,6 +56,13 @@ export class Pace {
 		list.splice(lo, 0, a.ms);
 		this.sorted.set(a.type, list);
 	}
+
+	/** A copy that can take more answers without changing this one. */
+	fork(): Pace {
+		const copy = new Pace();
+		for (const [type, list] of this.sorted) copy.sorted.set(type, list.slice());
+		return copy;
+	}
 }
 
 /**
@@ -81,12 +88,47 @@ export class Memory {
 	private scheduler: FSRS;
 
 	/**
+	 * The schedule for these answers, without replaying what was replayed
+	 * before. A replay of the same answers is reused as it is. One of the
+	 * answers it began with is extended by the answers given since, which
+	 * is how a history grows: a year of answers costs a fraction of a second
+	 * to replay, and every screen needs the schedule. The result is shared,
+	 * so it must not be given more answers.
+	 */
+	static of(attempts: Attempt[], retention: number): Memory {
+		const ordered = inTimeOrder(attempts);
+		const prints = new Prints(ordered);
+		let base: Replay | null = null;
+		for (const r of [...replays, ...checkpoints]) {
+			if (r.retention !== retention || r.count > ordered.length || prints.at(r.count) !== r.print) continue;
+			if (!base || r.count > base.count) base = r;
+		}
+		if (base && base.count === ordered.length) {
+			remember(base);
+			return base.memory;
+		}
+		const memory = base ? base.memory.fork() : new Memory([], retention);
+		for (let i = base?.count ?? 0; i < ordered.length; i++) {
+			memory.apply(ordered[i]);
+			// Points along a long replay, for a first part of the same history
+			// (the radar's week ago, the streak's yesterday) to resume from.
+			const done = i + 1;
+			if (done % CHECKPOINT === 0 && ordered.length - done >= CHECKPOINT) {
+				checkpoints.unshift({ retention, count: done, print: prints.at(done), memory: memory.fork() });
+				checkpoints.length = Math.min(checkpoints.length, KEEP_CHECKPOINTS);
+			}
+		}
+		remember({ retention, count: ordered.length, print: prints.at(ordered.length), memory });
+		return memory;
+	}
+
+	/**
 	 * @param retention the chance of still remembering a question when it
 	 *   comes due, which sets how far apart reviews are.
 	 * @param until replay only the answers given up to this moment, to see
 	 *   memory as it stood then.
 	 */
-	constructor(attempts: Attempt[], retention: number, until?: Date) {
+	constructor(attempts: Attempt[], private retention: number, until?: Date) {
 		this.scheduler = fsrs({
 			request_retention: retention,
 			// Fuzz spreads out reviews so a batch learned together does not all
@@ -120,6 +162,16 @@ export class Memory {
 		this.cards.set(key, next);
 		this.pace.add(a);
 		if (!this.first.has(key)) this.first.set(key, at);
+	}
+
+	/** A copy that can replay more answers without changing this one. */
+	fork(): Memory {
+		const copy = new Memory([], this.retention);
+		// Cards are replaced on every answer, never changed, so they can be shared.
+		copy.cards = new Map(this.cards);
+		copy.first = new Map(this.first);
+		copy.pace = this.pace.fork();
+		return copy;
 	}
 
 	/** Whether any of these questions is due at or before `when`. */
@@ -198,7 +250,7 @@ export class Memory {
  */
 export function expectedScore(attempts: Attempt[], retention: number, at: Date): (bankId: string, questionId: string) => number | null {
 	const then = attempts.filter((a) => Date.parse(a.ts) <= at.getTime());
-	const memory = new Memory(then, retention);
+	const memory = Memory.of(then, retention);
 	const index = new AnswerIndex(then);
 	return (bankId, questionId) => {
 		const recall = memory.recall(qkey(bankId, questionId), at);
@@ -252,6 +304,89 @@ function inTimeOrder(attempts: Attempt[]): Attempt[] {
 		.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
 }
 
+/**
+ * Fingerprints of a history in time order, one for each of its beginnings:
+ * `at(i)` covers its first i answers. They take in everything a replay reads
+ * from an answer, so two histories with the same fingerprint replay the same.
+ * Two independent 32-bit hashes make a false match vanishingly unlikely.
+ */
+class Prints {
+	private a: Uint32Array;
+	private b: Uint32Array;
+
+	constructor(ordered: Attempt[]) {
+		this.a = new Uint32Array(ordered.length + 1);
+		this.b = new Uint32Array(ordered.length + 1);
+		let x = 0x811c9dc5;
+		let y = 0x9e3779b9;
+		// Field by field rather than through one string per answer: a year of
+		// answers is hashed on every screen, and the strings cost most of it.
+		const mix = (v: number) => {
+			x = Math.imul(x ^ v, 0x01000193);
+			y = Math.imul(y ^ v, 0x85ebca77);
+		};
+		const text = (s: string | undefined) => {
+			if (s) for (let j = 0; j < s.length; j++) mix(s.charCodeAt(j));
+			mix(0x1f);
+		};
+		const bits = new Float64Array(1);
+		const words = new Uint32Array(bits.buffer);
+		const num = (v: number) => {
+			bits[0] = v;
+			mix(words[0]);
+			mix(words[1]);
+		};
+		this.a[0] = x;
+		this.b[0] = y;
+		ordered.forEach((t, i) => {
+			text(t.ts);
+			text(t.bankId);
+			text(t.questionId);
+			num(t.score);
+			text(t.verdict);
+			text(t.confidence);
+			text(t.gradedBy);
+			text(t.type);
+			num(t.ms);
+			this.a[i + 1] = x;
+			this.b[i + 1] = y;
+		});
+	}
+
+	at(i: number): string {
+		return `${i}:${this.a[i]}:${this.b[i]}`;
+	}
+}
+
+/** A replay kept for reuse: the schedule after the first `count` answers of a history. */
+interface Replay {
+	retention: number;
+	count: number;
+	print: string;
+	memory: Memory;
+}
+
+/** Recent replays, newest first: today's schedule, a week ago's for the radar, and one at a new target recall. */
+const replays: Replay[] = [];
+const KEEP_REPLAYS = 4;
+/** Copies taken along long replays, every CHECKPOINT answers, newest first. */
+const checkpoints: Replay[] = [];
+const CHECKPOINT = 1024;
+const KEEP_CHECKPOINTS = 32;
+
+function remember(r: Replay): void {
+	const i = replays.indexOf(r);
+	if (i >= 0) replays.splice(i, 1);
+	replays.unshift(r);
+	replays.length = Math.min(replays.length, KEEP_REPLAYS);
+}
+
+/** Drops every kept replay, so the next schedule is worked out from scratch. */
+export function forgetReplays(): void {
+	replays.length = 0;
+	checkpoints.length = 0;
+}
+
 /** Local midnight at the start of `now`'s day. */
 export function startOfDay(now: Date): Date {
 	const d = new Date(now);
@@ -287,11 +422,17 @@ export interface DayRecord {
 export function dailyRecord(attempts: Attempt[], retention: number, keys: Set<string>, now: Date): DayRecord[] {
 	const ordered = inTimeOrder(attempts);
 	if (!ordered.length) return [];
-	const memory = new Memory([], retention);
+	return daysFrom(ordered, 0, new Memory([], retention), startOfDay(new Date(Date.parse(ordered[0].ts))), keys, now);
+}
+
+/**
+ * The daily record from `day` to today, replaying `ordered` from `i` into
+ * `memory`, which must hold the schedule as it stood when `day` began.
+ */
+function daysFrom(ordered: Attempt[], i: number, memory: Memory, day: Date, keys: Set<string>, now: Date): DayRecord[] {
 	const out: DayRecord[] = [];
 	const last = startOfDay(now).getTime();
-	let i = 0;
-	for (let day = startOfDay(new Date(Date.parse(ordered[0].ts))); day.getTime() <= last; ) {
+	while (day.getTime() <= last) {
 		const end = endOfDay(day);
 		let answers = 0;
 		while (i < ordered.length && Date.parse(ordered[i].ts) <= end.getTime()) {
@@ -323,16 +464,36 @@ export function dateKey(day: Date): string {
 export function settledRecord(
 	attempts: Attempt[], retention: number, keys: Set<string>, now: Date, kept: Record<string, DayLog>,
 ): { days: DayRecord[]; settle: Record<string, DayLog> } {
+	const ordered = inTimeOrder(attempts);
+	if (!ordered.length) return { days: [], settle: {} };
 	const today = startOfDay(now).getTime();
+	// Kept days need no replaying. The unbroken run of them from the first
+	// answer is taken as it is, and the record resumes after it from the
+	// schedule as it stood at the end of its last day: usually yesterday, so
+	// only today is worked out.
+	const run: DayRecord[] = [];
+	let day = startOfDay(new Date(Date.parse(ordered[0].ts)));
+	for (; day.getTime() < today; day = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1)) {
+		const old = kept[dateKey(day)];
+		if (!old) break;
+		run.push({ day: day.getTime(), answers: old.answers, clear: old.clear });
+	}
+	let i = 0;
+	let memory = new Memory([], retention);
+	if (run.length) {
+		const cutoff = endOfDay(new Date(run[run.length - 1].day)).getTime();
+		while (i < ordered.length && Date.parse(ordered[i].ts) <= cutoff) i += 1;
+		memory = Memory.of(ordered.slice(0, i), retention).fork();
+	}
 	const settle: Record<string, DayLog> = {};
-	const days = dailyRecord(attempts, retention, keys, now).map((d) => {
+	const rest = daysFrom(ordered, i, memory, day, keys, now).map((d) => {
 		const key = dateKey(new Date(d.day));
 		const old = kept[key];
 		if (old) return { day: d.day, answers: old.answers, clear: old.clear };
 		if (d.day < today) settle[key] = { answers: d.answers, clear: d.clear };
 		return d;
 	});
-	return { days, settle };
+	return { days: [...run, ...rest], settle };
 }
 
 export interface Streak {
@@ -379,8 +540,11 @@ const TIER_ORDER: Record<Tier, number> = { easy: 0, hard: 1, brutal: 2 };
  * Today's review. Everything due today comes first, most at risk first, so
  * ending a session early still covers what matters most. Then new questions,
  * up to the day's allowance, and only from notes marked complete or already
- * examined: never from a note not read yet. Completed notes go first, oldest
- * first, and within a note easy questions come before hard ones. A new
+ * examined: never from a note not read yet. Your own highlights are the
+ * exception: highlighting a sentence says you have read it and want it
+ * remembered, so its question can come in at once, after the notes you
+ * completed or examined. Completed notes go first, oldest first, and within
+ * a note easy questions come before hard ones. A new
  * question in a tier its quiz has not opened yet waits; one already answered
  * stays due, since forgetting it would undo the work.
  */
@@ -395,6 +559,8 @@ export function planReview(p: {
 	noteOf: (bankId: string) => string | undefined;
 	/** Whether a question's tier is open; every tier is, if not given. */
 	isOpen?: (item: ExamItem) => boolean;
+	/** Whether a bank holds your highlights, which may come in before their note is completed. */
+	isHighlights?: (bankId: string) => boolean;
 }): ReviewPlan {
 	const { items, memory, now } = p;
 	const today = endOfDay(now);
@@ -414,7 +580,9 @@ export function planReview(p: {
 			const t = Date.parse(done);
 			return Number.isNaN(t) ? 0 : t;
 		}
-		return started.has(it.bankId) ? Number.MAX_SAFE_INTEGER : null;
+		if (started.has(it.bankId)) return Number.MAX_SAFE_INTEGER;
+		// After everything above, but never held back.
+		return p.isHighlights?.(it.bankId) ? Number.MAX_VALUE : null;
 	};
 	const fresh = items
 		.filter((it) => !memory.has(keyOf(it)) && (p.isOpen?.(it) ?? true))

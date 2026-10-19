@@ -54,6 +54,13 @@ export function makeVault(delayMs = 5) {
 			await sleep();
 			files.set(f.path, body);
 		},
+		/** Reads, changes and writes with nothing in between, as Obsidian's does. */
+		async process(f: TFile, fn: (data: string) => string) {
+			await sleep();
+			const next = fn(files.get(f.path) ?? "");
+			files.set(f.path, next);
+			return next;
+		},
 		async create(p: string, body: string) {
 			await sleep();
 			if (files.has(p)) throw new Error(`File already exists: ${p}`);
