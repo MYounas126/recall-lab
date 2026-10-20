@@ -17,7 +17,8 @@ Open an [issue](https://github.com/MYounas126/recall-lab/issues). For a bug, inc
 3. Add or update a test in `test/` for anything that changes what the plugin does.
 4. Run `npm run build` and `npm test`. Both must pass, as they do in CI.
 5. If the change touches anything a user sees, update [docs/user-guide.md](docs/user-guide.md) as well.
-6. Open a pull request that says what changed and why.
+6. Describe the change under **`## [Unreleased]`** in `CHANGELOG.md`. Don't bump the version or edit `manifest.json`: releases gather up about a month of work at a time, and are cut separately. See [Releasing](docs/development.md#releasing).
+7. Open a pull request that says what changed and why.
 
 Before a release, the plugin is also checked with Obsidian's [ESLint rules](https://github.com/obsidianmd/eslint-plugin), the same rules the community directory reviews it with. Code that adds an error there can't be released.
 
