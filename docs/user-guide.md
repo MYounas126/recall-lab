@@ -195,6 +195,20 @@ Recall Lab compiles the challenge and runs it once on the input that is meant to
 
 The binary lands in `~/RecallLab/labs/<challenge>/`, with a brief beside it. Copy it wherever you work — a Kali VM, say — and use your own tools on it. It reads from stdin and prints the flag only when the input is right. Submit that flag in Recall Lab as usual. The source is kept with the lab but stays hidden until you solve it or give up, and then it is shown as part of the solution.
 
+**Exploitation challenges.** The third kind. You get a vulnerable x86-64 Linux program, **with symbols**, that has a stack bug you reach from stdin and a `win` function that prints the flag and is never called on its own. Reaching it is the exercise. Recall Lab never writes or runs an exploit — that part is yours.
+
+Build one from **Exploitation challenge…** in a course's Labs panel, or with the command **Build an exploitation challenge from this note**. The tier decides the protections, so a tier always means the same thing:
+
+| Tier | What you face |
+|---|---|
+| Easy | NX, no stack canary, no PIE — fixed addresses |
+| Hard | NX, no canary, PIE — addresses move, so you need a leak |
+| Brutal | NX, stack canary, PIE and full RELRO |
+
+Before handing one over, Recall Lab checks it is worth your time. It compiles the program, confirms the flag cannot be read out of it with `strings`, runs it on ordinary input to be sure it prints nothing and exits cleanly, checks there is a `win` to aim at, and builds a second copy under the address sanitizer to confirm the bug is really there and really is a stack overflow. It also checks the protections came out as the tier intends. A challenge that fails any of those is thrown away rather than wasting your evening.
+
+The binary lands in `~/RecallLab/labs/<challenge>/` like any other, with a brief that says what it was built with.
+
 **Scoring.** A solved lab starts at 100%:
 
 - each hint costs 15%;
@@ -259,7 +273,8 @@ Run these from the command palette. Each one starts with **Recall Lab:**.
 | Write variants for mature questions | Writes reworded versions of questions you have mastered (uses Claude). |
 | Write guided steps for brutal problems | Writes step-by-step build-ups for brutal problems (uses Claude). |
 | Shorten lab hints to CTF-style nudges | Rewrites the long hints of older labs (uses Claude). |
-| Build a binary challenge from this note | Writes a compiled challenge to reverse (uses Claude, and Docker to build it). |
+| Build a reversing challenge from this note | Writes a compiled challenge to reverse (uses Claude, and Docker to build it). |
+| Build an exploitation challenge from this note | Writes a vulnerable program with a `win` path to reach (uses Claude, and Docker to build it). |
 | Remove leftover quizzes, labs and courses | Moves quizzes, labs and courses whose note or folder is gone to the trash, after you confirm. |
 | Run diagnostics | Reports where the CLI is, whether Claude replies, and what your vault holds. |
 

@@ -34,7 +34,9 @@ To try a build in Obsidian:
 | `src/memory.ts` | The FSRS review schedule, rebuilt from the answer history. |
 | `src/radar.ts`, `src/notemap.ts` | The skill radar, and the memory dots on headings. |
 | `src/gates.ts` | The tier gates: which tiers of a quiz are open. |
-| `src/crackme.ts`, `src/sandbox.ts` | Binary challenges: the prompt and the checks, and the container they are built in. |
+| `src/crackme.ts` | Reversing challenges: the prompt, and the checks that one can be solved. |
+| `src/pwn.ts` | Exploitation challenges: the prompt, the per-tier protections, and the checks that the bug is real. |
+| `src/sandbox.ts` | The container challenges are built and checked in. |
 | `src/labs.ts`, `highlights.ts`, `blurt.ts`, `teach.ts`, `leeches.ts`, `variants.ts`, `guided.ts`, `recall.ts` | One feature each. |
 | `test/` | Tests (see [Testing](#testing)). |
 | `scripts/` | Release helpers (`check-release.mjs`, `release-notes.mjs`, `version-bump.mjs`) and the vault smoke test (`smoke-test.js`). |

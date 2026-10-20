@@ -6,7 +6,7 @@ import { shuffled } from "./util";
 import { QuestionScore, renderRadar, scoreAxes, scoreCourses, weakestTested, untested, withBefore, AxisScore } from "./radar";
 import {
 	Attempt, Bank, BlurtResult, Confidence, Course, ExamItem, Lab, LabProgress, ProgressFile, Question, SessionSummary, Tier,
-	TeachResult, Turn, idOf, isBinaryLab, labScore, letterGrade, qkey,
+	TeachResult, Turn, idOf, isBinaryLab, isPwnLab, labScore, letterGrade, qkey,
 } from "./types";
 import { AnswerIndex, calibration } from "./history";
 import {
@@ -25,6 +25,7 @@ import { SECOND_TRY_CAP, combineTries } from "./tasks";
 import { blurtExam, missedHeading } from "./blurt";
 import { checkFlag, hashFlag, hintsNeedShortening } from "./labs";
 import { briefFooter } from "./crackme";
+import { PWN_PROTECTIONS } from "./pwn";
 import { INSTALL_HINT } from "./claude";
 import { Gate, GateRule, gatesOf, isOpen, lockedTiers, opened, tierNames, whyLocked } from "./gates";
 import { isHighlightBank } from "./highlights";
@@ -1267,10 +1268,10 @@ export class RecallLabView extends ItemView {
 		if (labs.length) head.createSpan({ cls: "rl-grade-pill", text: `${solved}/${labs.length} solved` });
 
 		// A challenge is built from one note, so the note is picked here.
-		const buildChallenge = () => {
+		const buildChallenge = (kind: "binary" | "pwn") => () => {
 			const notes = this.plugin.store.notesIn(folder);
 			if (!notes.length) { new Notice("This course has no notes yet."); return; }
-			new PickNoteModal(this.app, notes, (note) => void this.plugin.offerChallenge(note)).open();
+			new PickNoteModal(this.app, notes, (note) => void this.plugin.offerChallenge(note, kind)).open();
 		};
 
 		if (!labs.length) {
@@ -1279,9 +1280,9 @@ export class RecallLabView extends ItemView {
 				text: "No labs yet. Press Labs beside a note below for challenges you solve by reading, or build a " +
 					"binary challenge to reverse with your own tools.",
 			});
-			new ButtonComponent(panel.createDiv({ cls: "rl-actions" }))
-				.setButtonText("Build a binary challenge…")
-				.onClick(buildChallenge);
+			const first = panel.createDiv({ cls: "rl-actions" });
+			new ButtonComponent(first).setButtonText("Build a reversing challenge…").onClick(buildChallenge("binary"));
+			new ButtonComponent(first).setButtonText("Build an exploitation challenge…").onClick(buildChallenge("pwn"));
 			return;
 		}
 
@@ -1290,9 +1291,12 @@ export class RecallLabView extends ItemView {
 			text: "Hands-on challenges. Source labs are solved by reading; a binary challenge is compiled, and you " +
 				"reverse it with your own tools. Either way the flag comes back here.",
 		});
-		new ButtonComponent(head).setButtonText("Build a binary challenge…")
-			.setTooltip("Claude designs a reversing challenge from one of this course's notes (uses Claude)")
-			.onClick(buildChallenge);
+		new ButtonComponent(head).setButtonText("Reversing challenge…")
+			.setTooltip("A compiled binary to reverse, built from one of this course's notes (uses Claude)")
+			.onClick(buildChallenge("binary"));
+		new ButtonComponent(head).setButtonText("Exploitation challenge…")
+			.setTooltip("A program with a stack bug and a win path to reach (uses Claude)")
+			.onClick(buildChallenge("pwn"));
 
 		const order: Record<string, number> = { easy: 0, hard: 1, brutal: 2 };
 		for (const lab of labs.slice().sort((a, b) => order[a.tier] - order[b.tier] || a.title.localeCompare(b.title))) {
@@ -2622,9 +2626,16 @@ export class RecallLabView extends ItemView {
 		panel.createEl("h3", { text: "The challenge" });
 		panel.createDiv({
 			cls: "rl-muted",
-			text: "An x86-64 Linux binary. It reads from stdin and prints the flag only when the input is right. " +
-				"Copy it to wherever you reverse things and take it apart with your own tools.",
+			text: isPwnLab(lab)
+				? "An x86-64 Linux binary, with symbols. It reads from stdin, and somewhere inside is a `win` " +
+					"function that prints the flag and is never called on its own. Reach it. Copy it to wherever " +
+					"you work and use your own tools."
+				: "An x86-64 Linux binary. It reads from stdin and prints the flag only when the input is right. " +
+					"Copy it to wherever you reverse things and take it apart with your own tools.",
 		});
+		if (isPwnLab(lab)) {
+			panel.createDiv({ cls: "rl-muted", text: `Built with: ${PWN_PROTECTIONS[lab.tier]}` });
+		}
 		panel.createEl("pre", { cls: "rl-code" }).createEl("code", { text: binary });
 
 		const actions = panel.createDiv({ cls: "rl-actions" });
@@ -2870,25 +2881,44 @@ export class PickNoteModal extends Modal {
 
 /** Picks how hard a binary challenge should be, and says what it will cost. */
 export class ChallengeModal extends Modal {
-	constructor(app: App, private note: string, private onPick: (tier: Tier) => void) {
+	constructor(
+		app: App,
+		private note: string,
+		private kind: "binary" | "pwn",
+		private onPick: (tier: Tier) => void
+	) {
 		super(app);
 	}
 
 	onOpen(): void {
-		this.contentEl.createEl("h3", { text: `Build a challenge from "${this.note}"` });
+		const pwn = this.kind === "pwn";
+		this.contentEl.createEl("h3", {
+			text: `Build ${pwn ? "an exploitation" : "a reversing"} challenge from "${this.note}"`,
+		});
 		this.contentEl.createEl("p", {
-			text: "Claude designs a reverse-engineering challenge from this note, and Recall Lab compiles it and " +
-				"checks it can be solved. You get an x86-64 Linux binary to reverse with your own tools. " +
-				"This takes a few minutes and uses your Claude plan.",
+			text: pwn
+				? "Claude designs a program with a stack bug and a win path that prints the flag. Recall Lab " +
+					"compiles it, checks the flag cannot be read out of it, that ordinary input gives nothing " +
+					"away, and — with a sanitizer build — that the bug is really there. Writing the exploit is " +
+					"yours. This takes a few minutes and uses your Claude plan."
+				: "Claude designs a reverse-engineering challenge from this note, and Recall Lab compiles it and " +
+					"checks it can be solved. You get an x86-64 Linux binary to reverse with your own tools. " +
+					"This takes a few minutes and uses your Claude plan.",
 		});
 		const row = this.contentEl.createDiv({ cls: "rl-actions" });
 		const pick = (tier: Tier, label: string, hint: string) => {
 			new ButtonComponent(row).setButtonText(label).setTooltip(hint)
 				.onClick(() => { this.close(); this.onPick(tier); });
 		};
-		pick("easy", "Easy", "One mechanism, traced carefully");
-		pick("hard", "Hard", "A transformation to invert, or control flow to untangle");
-		pick("brutal", "Brutal", "Several stages: a bytecode machine, or a chain of them");
+		if (pwn) {
+			pick("easy", "Easy", PWN_PROTECTIONS.easy);
+			pick("hard", "Hard", PWN_PROTECTIONS.hard);
+			pick("brutal", "Brutal", PWN_PROTECTIONS.brutal);
+		} else {
+			pick("easy", "Easy", "One mechanism, traced carefully");
+			pick("hard", "Hard", "A transformation to invert, or control flow to untangle");
+			pick("brutal", "Brutal", "Several stages: a bytecode machine, or a chain of them");
+		}
 		new ButtonComponent(row).setButtonText("Cancel").onClick(() => this.close());
 	}
 
