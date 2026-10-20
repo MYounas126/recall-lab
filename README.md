@@ -32,7 +32,7 @@ Claude writes them and marks open answers through the Claude Code CLI, so you do
 - **A daily review** scheduled by [FSRS](https://github.com/open-spaced-repetition/ts-fsrs). The questions you are closest to forgetting come first, then new ones up to a daily limit.
 - **Exams in three tiers**: easy (recall), hard (application) and brutal (synthesis and hands-on). Claude writes them from each note. Hard unlocks once you own 80% of a note's Easy questions, and Brutal once you own 80% of its Hard ones.
 - **More than multiple choice**: written and shell-command answers, click the bug, register traces, ordering and matching. Your own `==highlights==` also become fill-in-the-blank questions, which join your daily review as soon as you write them.
-- **CTF-style labs**, in two shapes: a source file you solve by reading, or a **compiled x86-64 binary you reverse with your own tools** — Ghidra, gdb, radare2, whatever you use. Challenges are built from your notes, so they test what your course actually covers.
+- **CTF-style labs**, in three shapes: a source file you solve by reading, a **compiled x86-64 binary you reverse**, or a **vulnerable program you exploit** to reach a `win` path. You use your own tools — Ghidra, gdb, pwntools, whatever you like. Challenges are built from your notes, so they test what your course actually covers.
 - **Memory on your notes**: a dot on each heading that has questions, plus a due count in each note's footer and in the status bar.
 - **A skill radar** for each course and for the whole vault. Each spoke is the score you could expect on that skill area today.
 - **Help when you are stuck**: a nudge and a second try, guided steps, a leech clinic, *Write it all down* and *Teach it back*.

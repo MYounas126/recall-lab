@@ -268,7 +268,7 @@ export function letterGrade(score: number): string {
 
 /** One file a lab materialises into its workspace. */
 /** How a lab is handed over: source to read, or a compiled binary to reverse. */
-export type LabKind = "source" | "binary";
+export type LabKind = "source" | "binary" | "pwn";
 
 /** How a binary challenge is compiled. The learner never sees this. */
 export interface LabBuild {
@@ -324,7 +324,12 @@ export interface Lab {
 
 /** Whether a lab hands over a compiled program rather than source to read. */
 export function isBinaryLab(lab: Lab): boolean {
-	return lab.kind === "binary" && Boolean(lab.build);
+	return (lab.kind === "binary" || lab.kind === "pwn") && Boolean(lab.build);
+}
+
+/** Whether a lab hands over a program to exploit rather than one to read. */
+export function isPwnLab(lab: Lab): boolean {
+	return lab.kind === "pwn" && Boolean(lab.build);
 }
 
 export interface LabProgress {

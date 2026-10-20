@@ -9,6 +9,33 @@ and gives them a version, about once a month — not once per change.
 
 ## [Unreleased]
 
+### Added
+
+- **Exploitation challenges.** Alongside the reversing challenges, a lab can
+  now be a vulnerable x86-64 Linux program with symbols: it has a stack bug
+  you reach from stdin, and a `win` function that prints the flag and is never
+  called on its own. You write the exploit yourself, in your own VM, with your
+  own tools — Recall Lab never writes or runs one.
+
+  The tier decides the protections, not the generator, so a tier always means
+  the same thing:
+
+  | Tier | What you face |
+  |---|---|
+  | Easy | NX, no canary, no PIE — fixed addresses |
+  | Hard | NX, no canary, PIE — addresses move, so you need a leak |
+  | Brutal | NX, canary, PIE and full RELRO |
+
+  Before a challenge is handed over, Recall Lab compiles it, checks the flag
+  cannot be read out of it, that ordinary input prints nothing and exits
+  cleanly, that there is a `win` to aim at, and — with a second build under
+  the address sanitizer — that the bug is really there and is a stack
+  overflow. It also checks the binary's protections came out as the tier
+  intends. A challenge failing any of those is thrown away.
+
+  Build one from a course's Labs panel or with **Build an exploitation
+  challenge from this note**.
+
 ### Fixed
 
 - **A hard or brutal binary challenge could come back as prose instead of a

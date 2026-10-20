@@ -157,17 +157,20 @@ export default class RecallLabPlugin extends Plugin {
 		this.addCommand({ id: "remove-leftovers", name: "Remove leftover quizzes, labs and courses", callback: () => void this.removeLeftovers() });
 		this.addCommand({ id: "write-variants", name: "Write variants for mature questions", callback: () => void this.offerVariants() });
 		this.addCommand({ id: "write-steps", name: "Write guided steps for brutal problems", callback: () => void this.offerSteps() });
-		this.addCommand({
-			id: "build-challenge",
-			name: "Build a binary challenge from this note",
-			checkCallback: (checking) => {
-				const file = this.app.workspace.getActiveFile();
-				if (!file || file.extension !== "md") return false;
-				if (checking) return true;
-				void this.offerChallenge(file.path);
-				return true;
-			},
-		});
+		const challengeCommand = (id: string, name: string, kind: "binary" | "pwn") =>
+			this.addCommand({
+				id,
+				name,
+				checkCallback: (checking) => {
+					const file = this.app.workspace.getActiveFile();
+					if (!file || file.extension !== "md") return false;
+					if (checking) return true;
+					void this.offerChallenge(file.path, kind);
+					return true;
+				},
+			});
+		challengeCommand("build-challenge", "Build a reversing challenge from this note", "binary");
+		challengeCommand("build-pwn", "Build an exploitation challenge from this note", "pwn");
 		this.addCommand({ id: "shorten-lab-hints", name: "Shorten lab hints to CTF-style nudges", callback: () => void this.offerHintRewrite() });
 
 		// The "Complete" footer at the bottom of every note inside a course folder.
@@ -589,9 +592,9 @@ export default class RecallLabPlugin extends Plugin {
 	}
 
 	/** Asks how hard the challenge should be, then builds it. */
-	async offerChallenge(notePath: string): Promise<void> {
+	async offerChallenge(notePath: string, kind: "binary" | "pwn" = "binary"): Promise<void> {
 		const name = notePath.split("/").pop()!.replace(/\.md$/, "");
-		new ChallengeModal(this.app, name, (tier) => void this.buildChallenge(notePath, tier)).open();
+		new ChallengeModal(this.app, name, kind, (tier) => void this.buildChallenge(notePath, tier, kind)).open();
 	}
 
 	/**
@@ -600,7 +603,7 @@ export default class RecallLabPlugin extends Plugin {
 	 * builds it and proves the intended input really produces the flag, and
 	 * the finished program is left where you can pick it up.
 	 */
-	async buildChallenge(notePath: string, tier: Tier): Promise<Lab | null> {
+	async buildChallenge(notePath: string, tier: Tier, kind: "binary" | "pwn" = "binary"): Promise<Lab | null> {
 		const courses = await this.store.listCourses();
 		const course = courses.find((c) => notePath.startsWith(c.folder.replace(/\/+$/, "") + "/"));
 		if (!course) { new Notice("That note is not inside a course folder."); return null; }
@@ -630,15 +633,18 @@ export default class RecallLabPlugin extends Plugin {
 		}
 
 		const name = notePath.split("/").pop()!.replace(/\.md$/, "");
+		const what = kind === "pwn" ? "exploitation" : "reversing";
 		// Something different each time: the titles already written for this note.
 		const avoid = (await this.labs.list())
-			.filter((l) => l.note === notePath && l.kind === "binary")
+			.filter((l) => l.note === notePath && l.kind === kind)
 			.map((l) => l.title);
-		const res = await this.build(`ctf:${notePath}:${tier}`, `a ${tier} challenge for "${name}"`, async () => {
-			this.log.info("building a challenge", { note: notePath, tier });
-			const notice = new Notice(`Writing a ${tier} challenge for "${name}"… this takes a few minutes.`, 0);
+		const res = await this.build(`ctf:${kind}:${notePath}:${tier}`, `a ${tier} ${what} challenge for "${name}"`, async () => {
+			this.log.info("building a challenge", { note: notePath, tier, kind });
+			const notice = new Notice(`Writing a ${tier} ${what} challenge for "${name}"… this takes a few minutes.`, 0);
 			try {
-				return await this.tasks.generateCrackme(notePath, course, tier, avoid);
+				return kind === "pwn"
+					? await this.tasks.generatePwn(notePath, course, tier, avoid)
+					: await this.tasks.generateCrackme(notePath, course, tier, avoid);
 			} finally {
 				notice.hide();
 			}
@@ -646,11 +652,11 @@ export default class RecallLabPlugin extends Plugin {
 		if (!res) return null;
 
 		if ("error" in res) {
-			this.log.error("challenge build failed", { note: notePath, tier, error: res.error });
+			this.log.error("challenge build failed", { note: notePath, tier, kind, error: res.error });
 			new Notice(`Could not write that challenge: ${res.error}`, 20000);
 			return null;
 		}
-		this.log.info("challenge built", { note: notePath, tier, lab: res.id, title: res.title });
+		this.log.info("challenge built", { note: notePath, tier, kind, lab: res.id, title: res.title });
 		new Notice(`"${res.title}" is ready. The binary is in ${this.labs.dir(res)}`, 12000);
 		await this.refreshView();
 		return res;
