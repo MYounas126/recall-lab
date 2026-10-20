@@ -1,11 +1,13 @@
 import "./dom";
 import { test } from "node:test";
 import { strict as assert } from "node:assert";
-import { RecallLabView } from "../src/view";
+import { ChallengeModal, RecallLabView } from "../src/view";
+import { Modal } from "./obsidian-shim";
 import { Store } from "../src/store";
 import { LabStore, hashFlag } from "../src/labs";
 import { DEFAULT_SETTINGS, type RecallLabSettings } from "../src/settings";
 import type { Attempt, Bank, Course, Lab, Question, Tier } from "../src/types";
+import { PWN_CFLAGS, PWN_PROTECTIONS } from "../src/pwn";
 import { attempt, makeVault } from "./helpers";
 
 // The Recall Lab view drawn in a DOM over an in-memory vault, the way it is
@@ -29,12 +31,32 @@ const lab: Lab = {
 	hints: ["Mind the width."], flagHash: hashFlag("flag{abc}"), flagFormat: "flag{...}", solution: "Trace it.", minutes: 20,
 };
 
+/** A compiled challenge to reverse: its source is the answer, so the page must not show it. */
+const binaryLab: Lab = {
+	id: "ctf-1", courseId: "arch", note: "Arch/01 Intro.md", title: "Slot Machine", axis: "regs", tier: "easy",
+	kind: "binary", build: { cflags: ["-O2", "-s"], output: "slot" },
+	brief: "Find the input it wants.", setup: "", files: [{ path: "src/crackme.c", content: "SECRET_SOURCE_MARKER" }],
+	hints: ["Follow the table index."], flagHash: hashFlag("flag{slot}"), flagFormat: "flag{...}",
+	solution: "Invert the table.", minutes: 45,
+};
+
+/** An exploitation challenge: a vulnerable program with a win path to reach. */
+const pwnLab: Lab = {
+	id: "pwn-1", courseId: "arch", note: "Arch/01 Intro.md", title: "Frame of Mine", axis: "stack", tier: "brutal",
+	kind: "pwn", build: { cflags: PWN_CFLAGS.brutal, output: "stack" },
+	brief: "Reach the win path.", setup: "", files: [{ path: "src/pwn.c", content: "VULNERABLE_SOURCE_MARKER" }],
+	hints: ["Count to the saved return address."], flagHash: hashFlag("flag{pwned}"), flagFormat: "flag{...}",
+	solution: "Overwrite the saved return address.", minutes: 60,
+};
+
 /** A vault with one course, one quiz, a lab and two notes, one of them with a highlight. */
 function vaultFiles(attempts: Attempt[] = []): Record<string, string> {
 	return {
 		"_quiz/courses/arch.json": JSON.stringify(course),
 		"_quiz/banks/arch-01.json": JSON.stringify(bank),
 		"_quiz/labs/lab-1.json": JSON.stringify(lab),
+		"_quiz/labs/ctf-1.json": JSON.stringify(binaryLab),
+		"_quiz/labs/pwn-1.json": JSON.stringify(pwnLab),
 		"_quiz/progress/attempts.json": JSON.stringify({ attempts, sessions: [] }),
 		"Arch/01 Intro.md": "# Intro\n\nThe ==instruction pointer== holds the address of the next instruction.\n",
 		"Arch/02 Registers.md": "# Registers\n\nNothing highlighted here.\n",
@@ -56,6 +78,7 @@ interface View {
 	containerEl: HTMLElement;
 	onOpen(): Promise<void>;
 	render(): Promise<void>;
+	courses: Course[];
 	beginExam(bank: Bank, full: boolean): Promise<void>;
 	startReview(): Promise<void>;
 }
@@ -65,6 +88,8 @@ interface Drawn {
 	root: HTMLElement;
 	errors: string[];
 	vault: ReturnType<typeof makeVault>;
+	/** What the view asked the plugin to build, in order. */
+	asked: { note: string; kind: string }[];
 }
 
 async function open(files: Record<string, string>, settings: Partial<RecallLabSettings> = {}): Promise<Drawn> {
@@ -73,7 +98,9 @@ async function open(files: Record<string, string>, settings: Partial<RecallLabSe
 	const app = { vault, workspace: { openLinkText: async () => {} } } as never;
 	const s: RecallLabSettings = { ...DEFAULT_SETTINGS, recallFirst: false, ...settings };
 	const errors: string[] = [];
+	const asked: { note: string; kind: string }[] = [];
 	const plugin = {
+		offerChallenge: async (note: string, kind: string) => { asked.push({ note, kind }); },
 		settings: s,
 		store: new Store(app, () => s.banksFolder, () => s.progressFolder, () => s.coursesFolder),
 		labs: new LabStore(app, () => s.labsFolder, () => s.labWorkspace),
@@ -87,7 +114,7 @@ async function open(files: Record<string, string>, settings: Partial<RecallLabSe
 	const view = new RecallLabView({ app } as never, plugin as never) as unknown as View;
 	document.body.appendChild(view.containerEl);
 	await view.onOpen();
-	return { view, root: view.contentEl, errors, vault };
+	return { view, root: view.contentEl, errors, vault, asked };
 }
 
 /** What the view shows when a screen throws. */
@@ -182,7 +209,8 @@ test("your highlights count as new questions before their note is complete", asy
 
 test("on a lab, a wrong flag counts once, the right one solves it, and both are saved", async () => {
 	const { view, root, vault } = await open(vaultFiles());
-	view.openLab = view.allLabs[0];
+	// By id, not by position: the vault holds binary challenges too, and labs are sorted by title.
+	view.openLab = view.allLabs.find((l) => l.id === "lab-1")!;
 	view.screen = "lab";
 	await view.render();
 	const box = () => root.querySelector('input[placeholder="flag{...}"]') as HTMLInputElement;
@@ -212,4 +240,118 @@ test("on a lab, a wrong flag counts once, the right one solves it, and both are 
 	assert.ok(saved.solvedAt);
 	assert.equal(saved.wrongFlags.length, 2);
 	assert.ok(saved.wrongFlags.every((h: string) => /^[0-9a-f]{64}$/.test(h)), "wrong guesses are kept only as hashes");
+});
+
+
+// ----------------------------------------------- binary and pwn lab pages
+
+/** Opens a lab's page and hands back what was drawn. */
+async function openLab(id: string, settings: Partial<RecallLabSettings> = {}) {
+	const drawn = await open(vaultFiles(), settings);
+	drawn.view.openLab = drawn.view.allLabs.find((l) => l.id === id)!;
+	drawn.view.screen = "lab";
+	await drawn.view.render();
+	return drawn;
+}
+
+test("a reversing challenge points at its binary and keeps its source hidden", async () => {
+	const { view, root, errors } = await openLab("ctf-1");
+	assert.ok(!crashed(root));
+	assert.deepEqual(errors, []);
+	assert.match(root.textContent!, /The challenge/);
+	assert.match(root.textContent!, /An x86-64 Linux binary\./, "a reversing challenge, described as one");
+	assert.ok(root.textContent!.includes("/slot"), "it says where the binary is");
+	assert.ok(!root.textContent!.includes("SECRET_SOURCE_MARKER"), "the source is the answer, so it stays hidden");
+	assert.ok(button(root, "Copy the path"));
+	assert.ok(button(root, "Give up and show the solution"), "the way out is offered");
+	assert.ok(!root.textContent!.includes("Built with:"), "protections are a pwn thing");
+	void view;
+});
+
+test("an exploitation challenge says it has symbols, a win path, and what it was built with", async () => {
+	const { root, errors } = await openLab("pwn-1");
+	assert.ok(!crashed(root));
+	assert.deepEqual(errors, []);
+	assert.match(root.textContent!, /with symbols/);
+	assert.match(root.textContent!, /`win` function that prints the flag and is never called on its own/);
+	assert.ok(root.textContent!.includes(`Built with: ${PWN_PROTECTIONS.brutal}`), "the tier's protections, stated");
+	assert.ok(!root.textContent!.includes("VULNERABLE_SOURCE_MARKER"), "its source stays hidden too");
+	assert.ok(root.textContent!.includes("/stack"), "it says where the binary is");
+});
+
+test("a challenge whose binary has gone offers to build it again", async () => {
+	const { root } = await openLab("pwn-1");
+	// Nothing was ever written to the workspace, so the binary is missing.
+	assert.match(root.textContent!, /The binary is not on disk/);
+	assert.ok(button(root, "Rebuild it"));
+});
+
+test("giving up reveals the source, which is how it was built", async () => {
+	const { view, root } = await openLab("pwn-1");
+	button(root, "Give up and show the solution")!.click();
+	await until(() => view.contentEl.textContent!.includes("VULNERABLE_SOURCE_MARKER"));
+	assert.match(view.contentEl.textContent!, /how it was built/);
+	assert.match(view.contentEl.textContent!, /How it was meant to go/, "and the walkthrough");
+});
+
+// ------------------------------------------------- building a new challenge
+
+test("a course offers both kinds of challenge, and the labs panel lists what exists", async () => {
+	const { view, root, errors } = await open(vaultFiles());
+	view.screen = "folder";
+	view.selectedFolder = "Arch";
+	await view.render();
+	assert.ok(!crashed(root));
+	assert.deepEqual(errors, []);
+	assert.ok(button(root, "Reversing challenge…"), "a way to build one to reverse");
+	assert.ok(button(root, "Exploitation challenge…"), "and one to exploit");
+	assert.match(root.textContent!, /Slot Machine/);
+	assert.match(root.textContent!, /Frame of Mine/);
+});
+
+test("picking a kind opens a note picker, which passes the note and the kind on", async () => {
+	const { view, root, asked } = await open(vaultFiles());
+	view.screen = "folder";
+	view.selectedFolder = "Arch";
+	await view.render();
+
+	button(root, "Exploitation challenge…")!.click();
+	const picker = await until(() => Modal.opened[Modal.opened.length - 1]);
+	assert.match(picker.contentEl.textContent!, /Which note\?/);
+	const rows = [...picker.contentEl.querySelectorAll(".rl-pick-row")];
+	assert.deepEqual(rows.map((r) => r.textContent), ["01 Intro", "02 Registers"], "the course's notes, by name");
+
+	(rows[0] as HTMLElement).click();
+	assert.deepEqual(asked, [{ note: "Arch/01 Intro.md", kind: "pwn" }], "the note picked, and the kind asked for");
+	assert.equal(Modal.opened.includes(picker), false, "the picker closes behind itself");
+
+	button(root, "Reversing challenge…")!.click();
+	const second = await until(() => Modal.opened[Modal.opened.length - 1]);
+	([...second.contentEl.querySelectorAll(".rl-pick-row")][1] as HTMLElement).click();
+	assert.deepEqual(asked[1], { note: "Arch/02 Registers.md", kind: "binary" });
+	Modal.opened.slice().forEach((m) => m.close());
+});
+
+test("the tier picker says what each tier means, and differs by kind", () => {
+	const picked: Tier[] = [];
+	const pwn = new ChallengeModal({} as never, "05 The Stack", "pwn", (t) => picked.push(t));
+	pwn.open();
+	assert.match(pwn.contentEl.textContent!, /Build an exploitation challenge from "05 The Stack"/);
+	assert.match(pwn.contentEl.textContent!, /Writing the exploit is yours/, "it is clear what Recall Lab will not do");
+	for (const tier of ["Easy", "Hard", "Brutal"]) assert.ok(button(pwn.contentEl, tier), tier);
+	assert.equal(
+		button(pwn.contentEl, "Brutal")!.getAttribute("aria-label"),
+		PWN_PROTECTIONS.brutal,
+		"each tier says what it leaves you facing"
+	);
+	button(pwn.contentEl, "Hard")!.click();
+	assert.deepEqual(picked, ["hard"], "the tier chosen is the tier passed on");
+	assert.equal(Modal.opened.includes(pwn), false, "and it closes behind itself");
+
+	const rev = new ChallengeModal({} as never, "03 Registers", "binary", () => {});
+	rev.open();
+	assert.match(rev.contentEl.textContent!, /Build a reversing challenge/);
+	assert.match(rev.contentEl.textContent!, /binary to reverse with your own tools/);
+	assert.ok(!rev.contentEl.textContent!.includes("Writing the exploit is yours"));
+	rev.close();
 });

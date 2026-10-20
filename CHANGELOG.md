@@ -38,6 +38,15 @@ and gives them a version, about once a month — not once per change.
 
 ### Fixed
 
+- The lab page for a binary or exploitation challenge was never covered by a
+  test. It now is: the page is drawn and checked for both kinds — that it
+  points at the binary, says what an exploitation challenge was built with,
+  keeps the source hidden until the challenge is solved or given up, and
+  offers to build the binary again when it has gone. The pickers that choose
+  a note and a difficulty are covered too.
+
+### Fixed
+
 - **A hard or brutal binary challenge could come back as prose instead of a
   challenge.** Designing one of these means encoding a payload — a key
   schedule, a bytecode program — and Claude would try to run Python to work
