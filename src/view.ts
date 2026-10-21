@@ -26,6 +26,7 @@ import { blurtExam, missedHeading } from "./blurt";
 import { checkFlag, hashFlag, hintsNeedShortening } from "./labs";
 import { briefFooter } from "./crackme";
 import { PWN_PROTECTIONS } from "./pwn";
+import { AxisPractice, describePractice, knownButUntried, practice } from "./handson";
 import { INSTALL_HINT } from "./claude";
 import { Gate, GateRule, gatesOf, isOpen, lockedTiers, opened, tierNames, whyLocked } from "./gates";
 import { isHighlightBank } from "./highlights";
@@ -1095,9 +1096,12 @@ export class RecallLabView extends ItemView {
 		await this.launch({ id, title, questions: [] }, items, "review", { pool, before: gates, left: 0, includeLocked: null });
 	}
 
-	private renderLegend(panel: HTMLElement, scores: AxisScore[], onClick?: (id: string) => void): void {
+	private renderLegend(
+		panel: HTMLElement, scores: AxisScore[], onClick?: (id: string) => void, practised?: AxisPractice[]
+	): void {
 		const legend = panel.createDiv({ cls: "rl-radar-legend" });
 		const weakest = weakestTested(scores);
+		const byAxis = new Map((practised ?? []).map((p) => [p.axis.id, p]));
 		for (const s of scores) {
 			const row = legend.createDiv({ cls: "rl-legend-row" });
 			if (weakest && s.axis.id === weakest.axis.id) row.addClass("rl-legend-weak");
@@ -1108,6 +1112,13 @@ export class RecallLabView extends ItemView {
 				cls: "rl-legend-score",
 				text: !s.total ? "no quiz yet" : s.seen === 0 ? "not tested" : `${s.score}%`,
 			});
+			// Beside what you can answer: what you have actually done.
+			const p = byAxis.get(s.axis.id);
+			if (p) {
+				const hands = row.createSpan({ cls: "rl-legend-hands", text: describePractice(p) });
+				if (p.solved) hands.addClass("rl-legend-done");
+				else if (!p.total) hands.addClass("rl-legend-none");
+			}
 		}
 	}
 
@@ -1179,7 +1190,9 @@ export class RecallLabView extends ItemView {
 		ph.createSpan({ cls: "rl-grade-pill", text: `${overall}% · ${letterGrade(overall)}` });
 		renderRadar(panel.createDiv({ cls: "rl-radar-wrap" }), scores);
 		this.renderRadarCaption(panel);
-		this.renderLegend(panel, scores);
+		// What you have taken apart, as opposed to what you can answer about.
+		const practised = practice(course.axes, this.allLabs.filter((l) => l.courseId === course.id), progress.labs ?? {});
+		this.renderLegend(panel, scores, undefined, practised);
 		const weakest = weakestTested(scores);
 		const notYet = untested(scores);
 		if (weakest) {
@@ -1192,6 +1205,16 @@ export class RecallLabView extends ItemView {
 			panel.createDiv({
 				cls: "rl-radar-note",
 				text: `Not tested yet: ${notYet.map((a) => a.axis.label).join(", ")} — these read zero because they have not come up, not because you got them wrong.`,
+			});
+		}
+		// The gap the radar flatters: answered well, never done by hand.
+		const untried = knownButUntried(practised, scores);
+		if (untried.length) {
+			panel.createDiv({
+				cls: "rl-radar-note",
+				text: `Answered well but never done by hand: ${untried.map((a) => a.axis.label).join(", ")}. ` +
+					`There are labs for ${untried.length === 1 ? "it" : "them"}, and none solved yet — being able to ` +
+					"pick the right answer is not the same as having taken one apart.",
 			});
 		}
 

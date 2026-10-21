@@ -235,6 +235,10 @@ Hover over a dot for details.
 
 **The note footer** shows how many of the note's questions are due and when you last reviewed it. **Review this note** reviews only what is due there; new questions come in the daily review. **The status bar** shows today's due count; click it to start reviewing. To turn off the dots, the footer and the status bar together, use **Settings → Daily review → Memory map on notes**.
 
+**What you have done by hand.** Beside each skill area's score, the radar's legend says what you have actually taken apart: how many of its labs you have solved, at what score, and the hardest tier among them. An area with labs you opened and never finished reads differently from one you have never touched.
+
+This is kept separate from the spoke's score on purpose. A spoke answers *how likely am I to get its questions right now*, and fades as you forget. A solved lab is not a question that comes due again, so folding it in would muddle what the spoke means. The course page also points out the gap worth knowing about: an area you answer well but have never proved by hand.
+
 **The skill radar.** Each spoke is the score you could expect on that skill area today. It multiplies two numbers:
 
 - how well you have answered the area's questions, using each question's mean over its last three scores, so one lucky guess doesn't erase a history of misses;

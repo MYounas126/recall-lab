@@ -11,6 +11,25 @@ and gives them a version, about once a month — not once per change.
 
 ### Added
 
+- **What you have done by hand, beside what you can answer.** Every lab
+  already carried the skill area it belongs to, and solving one already had a
+  score — but neither reached the skill radar. Answering four questions about
+  the stack moved it; overflowing one did not.
+
+  Each axis on a course's radar now reads twice: the score you would expect if
+  asked right now, and what you have actually taken apart — how many of its
+  labs are solved, at what score, and the hardest tier among them. Labs opened
+  and not finished read differently from labs never opened.
+
+  The two are kept apart on purpose. Folding a solved lab into the spoke would
+  break what a spoke means, since a lab is not a question that can come due
+  again.
+
+  The course page also calls out the gap the radar flatters: an area you
+  answer well but have never proved by hand.
+
+### Added
+
 - **Exploitation challenges.** Alongside the reversing challenges, a lab can
   now be a vulnerable x86-64 Linux program with symbols: it has a stack bug
   you reach from stdin, and a `win` function that prints the flag and is never

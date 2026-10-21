@@ -744,3 +744,15 @@
 }
 .rl-pick-row:last-child { border-bottom: none; }
 .rl-pick-row:hover { background: var(--background-modifier-hover); }
+
+/* Under each axis's answered score: what has actually been done by hand.
+   Its own line across both columns, so the label and score keep their shape. */
+.rl-legend-hands {
+	grid-column: 1 / -1;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.3;
+	margin-bottom: 0.2rem;
+}
+.rl-legend-done { color: var(--color-green); }
+.rl-legend-none { color: var(--text-faint); }
