@@ -11,6 +11,22 @@ and gives them a version, about once a month — not once per change.
 
 ### Added
 
+- **The note picker shows what each note already has.** It listed every note
+  alike, so the easy thing was to keep picking the same one — which is how a
+  course ends up with four challenges on one note and none on the rest. Each
+  note now reads `50 q · 3 labs · 4 reversing`, or `nothing yet`, and notes
+  with none of the kind you are building come first. Among those, a note that
+  already has a quiz is offered before one that has not, since a note Recall
+  Lab has read well enough to question makes a better challenge.
+
+### Fixed
+
+- A course with no labs yet named the two challenge buttons differently from
+  a course that had some, so the course you most need to start on read as a
+  different feature.
+
+### Added
+
 - **What you have done by hand, beside what you can answer.** Every lab
   already carried the skill area it belongs to, and solving one already had a
   score — but neither reached the skill radar. Answering four questions about

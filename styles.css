@@ -756,3 +756,9 @@
 }
 .rl-legend-done { color: var(--color-green); }
 .rl-legend-none { color: var(--text-faint); }
+
+/* The note picker: what each note already has, beside its name. */
+.rl-pick-row { display: flex; align-items: baseline; justify-content: space-between; gap: 0.8rem; }
+.rl-pick-name { min-width: 0; overflow-wrap: anywhere; }
+.rl-pick-has { color: var(--text-muted); font-size: var(--font-ui-smaller); white-space: nowrap; }
+.rl-pick-bare { color: var(--text-faint); font-size: var(--font-ui-smaller); white-space: nowrap; }
