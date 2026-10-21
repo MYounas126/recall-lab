@@ -355,3 +355,49 @@ test("the tier picker says what each tier means, and differs by kind", () => {
 	assert.ok(!rev.contentEl.textContent!.includes("Writing the exploit is yours"));
 	rev.close();
 });
+
+
+// ------------------------------------------------ what was done by hand
+
+test("the radar shows what was done by hand beside what can be answered", async () => {
+	// One lab solved on Registers, one opened on Stack, and questions answered on both.
+	const files = vaultFiles(answered("e1", "e2", "e3", "e4", "h1", "h2"));
+	files["_quiz/progress/attempts.json"] = JSON.stringify({
+		attempts: JSON.parse(files["_quiz/progress/attempts.json"]).attempts,
+		sessions: [],
+		labs: {
+			"ctf-1": { labId: "ctf-1", attempts: 1, hintsUsed: 0, solvedAt: "2026-10-20T10:00:00.000Z" },
+			"pwn-1": { labId: "pwn-1", attempts: 0, hintsUsed: 0, firstOpenedAt: "2026-10-20T09:00:00.000Z" },
+		},
+	});
+	const { view, root, errors } = await open(files);
+	view.screen = "folder";
+	view.selectedFolder = "Arch";
+	await view.render();
+	assert.ok(!crashed(root));
+	assert.deepEqual(errors, []);
+
+	const rows = [...root.querySelectorAll(".rl-legend-row")].map((r) => ({
+		label: r.querySelector(".rl-legend-label")!.textContent,
+		hands: r.querySelector(".rl-legend-hands")?.textContent ?? null,
+	}));
+	const regs = rows.find((r) => r.label === "Registers")!;
+	// lab-1 and ctf-1 both sit on the regs axis; one of them is solved.
+	// attempts: 1 is the free first wrong flag, so it still scores 100.
+	assert.equal(regs.hands, "1 of 2 solved · 100% · hardest easy");
+	const stack = rows.find((r) => r.label === "Stack")!;
+	assert.equal(stack.hands, "1 of 1 open", "opened and not finished reads differently from never touched");
+	const flow = rows.find((r) => r.label === "Control flow")!;
+	assert.equal(flow.hands, "no labs yet");
+});
+
+test("an area answered well but never done by hand is called out", async () => {
+	const files = vaultFiles(answered("e1", "e2", "e3", "e4", "h1", "h2", "b1"));
+	const { view, root } = await open(files);
+	view.screen = "folder";
+	view.selectedFolder = "Arch";
+	await view.render();
+	// Nothing is solved, and Registers has questions answered and labs waiting.
+	assert.match(root.textContent!, /Answered well but never done by hand: Registers/);
+	assert.match(root.textContent!, /not the same as having taken one apart/);
+});
