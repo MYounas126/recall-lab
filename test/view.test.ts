@@ -296,6 +296,24 @@ test("giving up reveals the source, which is how it was built", async () => {
 
 // ------------------------------------------------- building a new challenge
 
+test("a course with no labs yet offers the same two buttons, by the same names", async () => {
+	// The empty state used to name the same action differently, so the course
+	// you most need to start on read as a different feature.
+	const bare = vaultFiles();
+	delete bare["_quiz/labs/lab-1.json"];
+	delete bare["_quiz/labs/ctf-1.json"];
+	delete bare["_quiz/labs/pwn-1.json"];
+	const { view, root, errors } = await open(bare);
+	view.screen = "folder";
+	view.selectedFolder = "Arch";
+	await view.render();
+	assert.ok(!crashed(root));
+	assert.deepEqual(errors, []);
+	assert.match(root.textContent!, /No labs yet/);
+	assert.ok(button(root, "Reversing challenge…"), "named as it is everywhere else");
+	assert.ok(button(root, "Exploitation challenge…"));
+});
+
 test("a course offers both kinds of challenge, and the labs panel lists what exists", async () => {
 	const { view, root, errors } = await open(vaultFiles());
 	view.screen = "folder";
@@ -318,17 +336,38 @@ test("picking a kind opens a note picker, which passes the note and the kind on"
 	button(root, "Exploitation challenge…")!.click();
 	const picker = await until(() => Modal.opened[Modal.opened.length - 1]);
 	assert.match(picker.contentEl.textContent!, /Which note\?/);
-	const rows = [...picker.contentEl.querySelectorAll(".rl-pick-row")];
-	assert.deepEqual(rows.map((r) => r.textContent), ["01 Intro", "02 Registers"], "the course's notes, by name");
+	const names = () => [...picker.contentEl.querySelectorAll(".rl-pick-name")].map((r) => r.textContent);
+	// 01 Intro already carries a pwn challenge, so the bare note is offered first.
+	assert.deepEqual(names(), ["02 Registers", "01 Intro"]);
 
-	(rows[0] as HTMLElement).click();
-	assert.deepEqual(asked, [{ note: "Arch/01 Intro.md", kind: "pwn" }], "the note picked, and the kind asked for");
+	([...picker.contentEl.querySelectorAll(".rl-pick-row")][0] as HTMLElement).click();
+	assert.deepEqual(asked, [{ note: "Arch/02 Registers.md", kind: "pwn" }], "the note picked, and the kind asked for");
 	assert.equal(Modal.opened.includes(picker), false, "the picker closes behind itself");
 
 	button(root, "Reversing challenge…")!.click();
 	const second = await until(() => Modal.opened[Modal.opened.length - 1]);
 	([...second.contentEl.querySelectorAll(".rl-pick-row")][1] as HTMLElement).click();
-	assert.deepEqual(asked[1], { note: "Arch/02 Registers.md", kind: "binary" });
+	assert.deepEqual(asked[1], { note: "Arch/01 Intro.md", kind: "binary" });
+	Modal.opened.slice().forEach((m) => m.close());
+});
+
+test("the note picker says what each note already has, and why the order is what it is", async () => {
+	const { view, root } = await open(vaultFiles());
+	view.screen = "folder";
+	view.selectedFolder = "Arch";
+	await view.render();
+	button(root, "Reversing challenge…")!.click();
+	const picker = await until(() => Modal.opened[Modal.opened.length - 1]);
+
+	const rows = [...picker.contentEl.querySelectorAll(".rl-pick-row")].map((r) => ({
+		name: r.querySelector(".rl-pick-name")!.textContent,
+		has: (r.querySelector(".rl-pick-has") ?? r.querySelector(".rl-pick-bare"))!.textContent,
+	}));
+	assert.deepEqual(rows[0], { name: "02 Registers", has: "nothing yet" }, "a note with nothing, said plainly");
+	// 01 Intro: a 7-question quiz plus the question made from its one ==highlight==,
+	// then a source lab, a reversing challenge and a pwn one.
+	assert.deepEqual(rows[1], { name: "01 Intro", has: "8 q · 1 lab · 1 reversing · 1 pwn" });
+	assert.match(picker.contentEl.textContent!, /Notes with none of these yet come first/);
 	Modal.opened.slice().forEach((m) => m.close());
 });
 

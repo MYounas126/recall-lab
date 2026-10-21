@@ -197,6 +197,8 @@ The binary lands in `~/RecallLab/labs/<challenge>/`, with a brief beside it. Cop
 
 **Exploitation challenges.** The third kind. You get a vulnerable x86-64 Linux program, **with symbols**, that has a stack bug you reach from stdin and a `win` function that prints the flag and is never called on its own. Reaching it is the exercise. Recall Lab never writes or runs an exploit — that part is yours.
 
+When you pick a note, the picker shows what each one already carries — its questions, labs and challenges — and offers the notes with none of that kind first, so a course spreads out instead of piling up on one note.
+
 Build one from **Exploitation challenge…** in a course's Labs panel, or with the command **Build an exploitation challenge from this note**. The tier decides the protections, so a tier always means the same thing:
 
 | Tier | What you face |

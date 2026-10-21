@@ -5,7 +5,7 @@ import { clozeBlanks, clozePieces, gradeLocally, sameValue } from "./grader";
 import { shuffled } from "./util";
 import { QuestionScore, renderRadar, scoreAxes, scoreCourses, weakestTested, untested, withBefore, AxisScore } from "./radar";
 import {
-	Attempt, Bank, BlurtResult, Confidence, Course, ExamItem, Lab, LabProgress, ProgressFile, Question, SessionSummary, Tier,
+	Attempt, Bank, BlurtResult, Confidence, Course, ExamItem, Lab, LabKind, LabProgress, ProgressFile, Question, SessionSummary, Tier,
 	TeachResult, Turn, idOf, isBinaryLab, isPwnLab, labScore, letterGrade, qkey,
 } from "./types";
 import { AnswerIndex, calibration } from "./history";
@@ -27,6 +27,7 @@ import { checkFlag, hashFlag, hintsNeedShortening } from "./labs";
 import { briefFooter } from "./crackme";
 import { PWN_PROTECTIONS } from "./pwn";
 import { AxisPractice, describePractice, knownButUntried, practice } from "./handson";
+import { NoteCoverage, allCovered, coverage, describeCoverage, pickOrder } from "./coverage";
 import { INSTALL_HINT } from "./claude";
 import { Gate, GateRule, gatesOf, isOpen, lockedTiers, opened, tierNames, whyLocked } from "./gates";
 import { isHighlightBank } from "./highlights";
@@ -1294,7 +1295,8 @@ export class RecallLabView extends ItemView {
 		const buildChallenge = (kind: "binary" | "pwn") => () => {
 			const notes = this.plugin.store.notesIn(folder);
 			if (!notes.length) { new Notice("This course has no notes yet."); return; }
-			new PickNoteModal(this.app, notes, (note) => void this.plugin.offerChallenge(note, kind)).open();
+			const covered = coverage(notes, this.everyBank, this.allLabs, progress.labs ?? {});
+			new PickNoteModal(this.app, covered, kind, (note) => void this.plugin.offerChallenge(note, kind)).open();
 		};
 
 		if (!labs.length) {
@@ -1304,8 +1306,13 @@ export class RecallLabView extends ItemView {
 					"binary challenge to reverse with your own tools.",
 			});
 			const first = panel.createDiv({ cls: "rl-actions" });
-			new ButtonComponent(first).setButtonText("Build a reversing challenge…").onClick(buildChallenge("binary"));
-			new ButtonComponent(first).setButtonText("Build an exploitation challenge…").onClick(buildChallenge("pwn"));
+			// The same names as the panel head uses once labs exist: one action, one name.
+			new ButtonComponent(first).setButtonText("Reversing challenge…")
+				.setTooltip("A compiled binary to reverse, built from one of this course's notes (uses Claude)")
+				.onClick(buildChallenge("binary"));
+			new ButtonComponent(first).setButtonText("Exploitation challenge…")
+				.setTooltip("A program with a stack bug and a win path to reach (uses Claude)")
+				.onClick(buildChallenge("pwn"));
 			return;
 		}
 
@@ -2881,18 +2888,33 @@ export class RecallLabView extends ItemView {
 /** A plain yes/no dialog, used before anything slow, costly or destructive. */
 /** Picks which note a challenge is built from. */
 export class PickNoteModal extends Modal {
-	constructor(app: App, private notes: string[], private onPick: (note: string) => void) {
+	constructor(
+		app: App,
+		private notes: NoteCoverage[],
+		private kind: LabKind,
+		private onPick: (note: string) => void
+	) {
 		super(app);
 	}
 
 	onOpen(): void {
 		this.contentEl.createEl("h3", { text: "Which note?" });
 		this.contentEl.createDiv({ cls: "rl-muted", text: "The challenge is built from this note's subject matter." });
+		const ordered = pickOrder(this.notes, this.kind);
+		// Only worth explaining the order while it is actually steering you.
+		if (!allCovered(this.notes, this.kind) && ordered.length > 1) {
+			this.contentEl.createDiv({
+				cls: "rl-muted",
+				text: "Notes with none of these yet come first, so a course spreads out instead of piling up on one note.",
+			});
+		}
 		const list = this.contentEl.createDiv({ cls: "rl-confirm-list" });
-		for (const note of this.notes) {
+		for (const c of ordered) {
 			const row = list.createDiv({ cls: "rl-pick-row rl-clickable" });
-			row.setText(note.split("/").pop()!.replace(/\.md$/, ""));
-			row.onclick = () => { this.close(); this.onPick(note); };
+			row.createSpan({ cls: "rl-pick-name", text: c.name });
+			const has = describeCoverage(c);
+			row.createSpan({ cls: has ? "rl-pick-has" : "rl-pick-bare", text: has ?? "nothing yet" });
+			row.onclick = () => { this.close(); this.onPick(c.note); };
 		}
 		new ButtonComponent(this.contentEl.createDiv({ cls: "rl-actions" })).setButtonText("Cancel").onClick(() => this.close());
 	}
