@@ -341,7 +341,30 @@ export interface LabProgress {
 	wrongFlags?: string[];
 	solvedAt?: string;
 	gaveUpAt?: string;
+	/**
+	 * When the lab page was first drawn. This is a record of looking, not of
+	 * working: it is stamped by the render, so browsing a list of labs stamps
+	 * every one you glance at. Never read it as "started".
+	 */
 	firstOpenedAt?: string;
+	/**
+	 * When you first took the challenge to your own tools: wrote the file out,
+	 * rebuilt the binary, or copied its path. Unlike firstOpenedAt this needs
+	 * a deliberate click.
+	 */
+	workedAt?: string;
+}
+
+/**
+ * Whether work has actually begun, as opposed to the page having been drawn.
+ *
+ * Opening a lab proves nothing — the page draws itself. What counts is an act
+ * that only you can perform: revealing a hint, submitting a flag, or taking
+ * the challenge out to your own tools.
+ */
+export function labStarted(p: LabProgress | undefined): boolean {
+	if (!p) return false;
+	return p.attempts > 0 || p.hintsUsed > 0 || Boolean(p.workedAt);
 }
 
 /** Full marks for a clean solve; hints and wrong flags cost. */

@@ -237,7 +237,9 @@ Hover over a dot for details.
 
 **The note footer** shows how many of the note's questions are due and when you last reviewed it. **Review this note** reviews only what is due there; new questions come in the daily review. **The status bar** shows today's due count; click it to start reviewing. To turn off the dots, the footer and the status bar together, use **Settings → Daily review → Memory map on notes**.
 
-**What you have done by hand.** Beside each skill area's score, the radar's legend says what you have actually taken apart: how many of its labs you have solved, at what score, and the hardest tier among them. An area with labs you opened and never finished reads differently from one you have never touched.
+**What you have done by hand.** Beside each skill area's score, the radar's legend says what you have actually taken apart: how many of its labs you have solved, at what score, and the hardest tier among them.
+
+Starting a lab means doing something to it — revealing a hint, submitting a flag, or taking the challenge out to your own tools by writing the file to disk or copying the binary's path. Opening the page to see what it asks is not starting it, and reads as `opened, none started`, which is different again from an area you have never touched.
 
 This is kept separate from the spoke's score on purpose. A spoke answers *how likely am I to get its questions right now*, and fades as you forget. A solved lab is not a question that comes due again, so folding it in would muddle what the spoke means. The course page also points out the gap worth knowing about: an area you answer well but have never proved by hand.
 

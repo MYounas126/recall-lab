@@ -1,4 +1,4 @@
-import "./dom";
+import { copied } from "./dom";
 import { test } from "node:test";
 import { strict as assert } from "node:assert";
 import { ChallengeModal, RecallLabView } from "../src/view";
@@ -399,14 +399,14 @@ test("the tier picker says what each tier means, and differs by kind", () => {
 // ------------------------------------------------ what was done by hand
 
 test("the radar shows what was done by hand beside what can be answered", async () => {
-	// One lab solved on Registers, one opened on Stack, and questions answered on both.
+	// One lab solved on Registers, one started on Stack, and questions answered on both.
 	const files = vaultFiles(answered("e1", "e2", "e3", "e4", "h1", "h2"));
 	files["_quiz/progress/attempts.json"] = JSON.stringify({
 		attempts: JSON.parse(files["_quiz/progress/attempts.json"]).attempts,
 		sessions: [],
 		labs: {
 			"ctf-1": { labId: "ctf-1", attempts: 1, hintsUsed: 0, solvedAt: "2026-10-20T10:00:00.000Z" },
-			"pwn-1": { labId: "pwn-1", attempts: 0, hintsUsed: 0, firstOpenedAt: "2026-10-20T09:00:00.000Z" },
+			"pwn-1": { labId: "pwn-1", attempts: 0, hintsUsed: 1, firstOpenedAt: "2026-10-20T09:00:00.000Z" },
 		},
 	});
 	const { view, root, errors } = await open(files);
@@ -425,9 +425,64 @@ test("the radar shows what was done by hand beside what can be answered", async 
 	// attempts: 1 is the free first wrong flag, so it still scores 100.
 	assert.equal(regs.hands, "1 of 2 solved · 100% · hardest easy");
 	const stack = rows.find((r) => r.label === "Stack")!;
-	assert.equal(stack.hands, "1 of 1 open", "opened and not finished reads differently from never touched");
+	assert.equal(stack.hands, "1 of 1 started", "a hint was taken, so work has begun");
 	const flow = rows.find((r) => r.label === "Control flow")!;
 	assert.equal(flow.hands, "no labs yet");
+});
+
+test("a lab only looked at does not read as work in progress", async () => {
+	// The lab page stamps firstOpenedAt as it draws. Browsing through the labs
+	// used to leave every one of them counted as started and then abandoned.
+	const files = vaultFiles(answered("e1", "e2", "e3", "e4", "h1", "h2"));
+	files["_quiz/progress/attempts.json"] = JSON.stringify({
+		attempts: JSON.parse(files["_quiz/progress/attempts.json"]).attempts,
+		sessions: [],
+		labs: { "pwn-1": { labId: "pwn-1", attempts: 0, hintsUsed: 0, firstOpenedAt: "2026-10-20T09:00:00.000Z" } },
+	});
+	const { view, root } = await open(files);
+	view.screen = "folder";
+	view.selectedFolder = "Arch";
+	await view.render();
+	const stack = [...root.querySelectorAll(".rl-legend-row")]
+		.find((r) => r.querySelector(".rl-legend-label")!.textContent === "Stack")!;
+	assert.equal(stack.querySelector(".rl-legend-hands")!.textContent, "1 of 1 opened, none started");
+	const row = [...root.querySelectorAll(".rl-lab-row")]
+		.find((r) => r.querySelector(".rl-lab-title")!.textContent === "Frame of Mine")!;
+	assert.match(row.querySelector(".rl-lab-meta")!.textContent!, /opened, not started/);
+	assert.ok(button(row as HTMLElement, "Open lab"), "and it still invites you in, not back");
+});
+
+test("drawing a lab page records the look but does not claim work was started", async () => {
+	const { vault } = await openLab("lab-1");
+	await until(() => Boolean(JSON.parse(vault.files.get("_quiz/progress/attempts.json")!).labs?.["lab-1"]));
+	const saved = JSON.parse(vault.files.get("_quiz/progress/attempts.json")!).labs["lab-1"];
+	assert.ok(saved.firstOpenedAt, "the look is recorded");
+	assert.equal(saved.workedAt, undefined, "but nothing was done to it");
+	assert.equal(saved.attempts, 0);
+	assert.equal(saved.hintsUsed, 0);
+});
+
+test("copying a challenge's path is what starts a binary lab", async () => {
+	// A binary lab has no file to write out, so this is its one way to say
+	// the challenge has been taken somewhere and work has begun.
+	const { root, vault } = await openLab("ctf-1");
+	const read = () => JSON.parse(vault.files.get("_quiz/progress/attempts.json")!).labs["ctf-1"];
+	await until(() => Boolean(read()));
+	assert.equal(read().workedAt, undefined, "drawing the page was not enough");
+	copied.length = 0;
+	button(root, "Copy the path")!.click();
+	await until(() => Boolean(read().workedAt));
+	assert.ok(read().workedAt);
+	assert.ok(copied[0]?.endsWith("/slot"), "and the path really was copied");
+});
+
+test("revealing a hint is what starts a lab", async () => {
+	const { root, vault } = await openLab("lab-1");
+	const read = () => JSON.parse(vault.files.get("_quiz/progress/attempts.json")!).labs["lab-1"];
+	await until(() => Boolean(read()));
+	button(root, "Reveal hint 1 of 1")!.click();
+	await until(() => read().hintsUsed === 1);
+	assert.equal(read().hintsUsed, 1, "and that is work, so the lab now counts as started");
 });
 
 test("an area answered well but never done by hand is called out", async () => {

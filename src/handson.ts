@@ -1,4 +1,4 @@
-import { Lab, LabProgress, SkillAxis, Tier, labScore } from "./types";
+import { Lab, LabProgress, SkillAxis, Tier, labScore, labStarted } from "./types";
 
 /**
  * What you have actually done, as opposed to what you can answer.
@@ -19,8 +19,14 @@ export interface AxisPractice {
 	/** Labs in this course that feed this axis. */
 	total: number;
 	solved: number;
-	/** Opened, not solved, not given up: work in progress. */
+	/**
+	 * Work in progress: a hint revealed, a flag tried, or the challenge taken
+	 * out to your own tools — and not yet finished or abandoned. Drawing the
+	 * page is not enough, or every lab you glanced at would read as started.
+	 */
 	started: number;
+	/** Opened and then left alone: nothing done to it yet. */
+	looked: number;
 	gaveUp: number;
 	/** Mean score over the labs solved, or null if none are. */
 	score: number | null;
@@ -38,6 +44,7 @@ export function practice(axes: SkillAxis[], labs: Lab[], progress: Record<string
 		const mine = labs.filter((l) => (known.has(l.axis) ? l.axis : axes[0]?.id) === axis.id);
 		const solved: Lab[] = [];
 		let started = 0;
+		let looked = 0;
 		let gaveUp = 0;
 		let sum = 0;
 		let best: Tier | null = null;
@@ -48,13 +55,15 @@ export function practice(axes: SkillAxis[], labs: Lab[], progress: Record<string
 				sum += labScore(p);
 				if (!best || HARDER[lab.tier] > HARDER[best]) best = lab.tier;
 			} else if (p?.gaveUpAt) gaveUp += 1;
-			else if (p?.firstOpenedAt) started += 1;
+			else if (labStarted(p)) started += 1;
+			else if (p?.firstOpenedAt) looked += 1;
 		}
 		return {
 			axis,
 			total: mine.length,
 			solved: solved.length,
 			started,
+			looked,
 			gaveUp,
 			score: solved.length ? Math.round(sum / solved.length) : null,
 			best,
@@ -69,8 +78,9 @@ export function describePractice(p: AxisPractice): string {
 		const tier = p.best === "brutal" ? "brutal" : p.best === "hard" ? "hard" : "easy";
 		return `${p.solved} of ${p.total} solved · ${p.score}% · hardest ${tier}`;
 	}
-	if (p.started) return `${p.started} of ${p.total} open`;
+	if (p.started) return `${p.started} of ${p.total} started`;
 	if (p.gaveUp) return `${p.gaveUp} given up`;
+	if (p.looked) return `${p.looked} of ${p.total} opened, none started`;
 	return `${p.total} never opened`;
 }
 

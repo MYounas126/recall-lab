@@ -9,6 +9,18 @@ and gives them a version, about once a month — not once per change.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A lab you only looked at no longer counts as one you abandoned.** The lab
+  page stamped the lab as opened the moment it drew, and the hands-on figures
+  beside the radar read that as work begun — so browsing through a course's
+  labs left every one of them reading as started and unfinished. Starting a
+  lab now means doing something to it: revealing a hint, submitting a flag, or
+  taking the challenge out to your own tools by writing the file to disk or
+  copying the binary's path. A lab that was only looked at reads as
+  `opened, none started`, which is its own thing, and existing progress sorts
+  itself out with no migration.
+
 ### Added
 
 - **The note picker shows what each note already has.** It listed every note
