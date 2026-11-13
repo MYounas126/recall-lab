@@ -55,6 +55,7 @@ another copy of that loop. It answers four questions:
 
 | Member | What it decides |
 |---|---|
+| `image` | The toolchain it is built in. Only a vault that builds this kind ever downloads it. |
 | `prompt()` | What Claude is asked for. |
 | `prepare()` | What the sandbox needs on disk: the build, the input files, and the script that checks it. Returns a string instead to refuse the reply. |
 | `verdict()` | Whether what came back is worth handing over, read from the script's own output. |
@@ -67,15 +68,16 @@ container's limits, the clean-up — belongs to the loop and applies to every
 kind automatically. `test/exercise.test.ts` proves that by running a third,
 non-C kind through the loop and checking the loop's own rules still bite.
 
-Two things the loop does not yet carry, and which a kind outside C would
-need:
+Put the finished descriptor in `KINDS` (`src/kinds.ts`). That list is what
+the loop, the commands and the settings read; nothing branches on a kind's
+name. A kind declares its own `image`, so adding a language does not make the
+C builder fatter, and a vault that only builds C challenges never downloads
+anything else. `imagesNeeded()` is the distinct set, so a toolchain shared by
+two kinds is built and reported once.
 
-- **The builder image holds a compiler and nothing else** (`src/sandbox.ts`).
-  A kind that needs another toolchain needs that in the image, and
-  `BUILDER_IMAGE`'s tag bumped.
-- **Finishing means submitting a flag.** A kind whose win condition is
-  "hidden tests pass" needs its own shape in `LabProgress` and on the lab
-  page, not just a descriptor.
+One thing the loop still does not carry: **finishing means submitting a
+flag.** A kind whose win condition is "hidden tests pass" needs its own shape
+in `LabProgress` and on the lab page, not just a descriptor.
 
 ## Testing
 

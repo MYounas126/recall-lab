@@ -1,5 +1,6 @@
 import { Course, Tier } from "./types";
 import { ExerciseKind, plainName } from "./exercise";
+import { C_BUILDER } from "./sandbox";
 import { textOf } from "./util";
 
 /**
@@ -226,6 +227,7 @@ export function briefFooter(output: string, flagFormat: string, tier: Tier): str
  */
 export const PWN: ExerciseKind = {
 	kind: "pwn",
+	image: C_BUILDER,
 	tag: "pwn",
 	verb: "build and check",
 	timeoutMs: 300000,

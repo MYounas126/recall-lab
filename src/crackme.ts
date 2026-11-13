@@ -1,5 +1,6 @@
 import { Course, Lab, LabBuild, Tier } from "./types";
 import { ExerciseKind } from "./exercise";
+import { C_BUILDER } from "./sandbox";
 import { textOf } from "./util";
 
 /**
@@ -214,6 +215,7 @@ export function briefFooter(lab: Lab): string {
  */
 export const CRACKME: ExerciseKind = {
 	kind: "binary",
+	image: C_BUILDER,
 	tag: "ctf",
 	verb: "build and run",
 	timeoutMs: 180000,

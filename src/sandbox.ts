@@ -14,10 +14,26 @@ import * as path from "path";
  * your own VM.
  */
 
-/** The builder image's tag. Bump the number when BUILDER_DOCKERFILE changes. */
-export const BUILDER_IMAGE = "recall-lab-build:1";
+/**
+ * One toolchain a kind of challenge can be built in.
+ *
+ * Kinds declare the image they need rather than sharing one, so a vault that
+ * only ever builds C challenges never downloads a compiler it has no use
+ * for, and adding a language does not make the existing image fatter.
+ */
+export interface SandboxImage {
+	/** The image tag. Bump the number whenever `dockerfile` changes. */
+	tag: string;
+	/** What to call it in a notice, e.g. "the C builder". */
+	label: string;
+	dockerfile: string;
+}
 
-export const BUILDER_DOCKERFILE = `# Recall Lab's challenge builder: x86-64 Linux and a compiler, nothing more.
+/** x86-64 Linux and a C compiler: what reversing and exploitation are built with. */
+export const C_BUILDER: SandboxImage = {
+	tag: "recall-lab-build:1",
+	label: "the C builder",
+	dockerfile: `# Recall Lab's challenge builder: x86-64 Linux and a compiler, nothing more.
 FROM --platform=linux/amd64 debian:trixie-slim
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \\
@@ -26,7 +42,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \\
 RUN useradd -m -u 1000 build
 USER build
 WORKDIR /work
-`;
+`,
+};
+
+/** The tag of the image every challenge was built in before kinds could choose. */
+export const BUILDER_IMAGE = C_BUILDER.tag;
 
 export interface RunResult {
 	code: number | null;
@@ -79,7 +99,7 @@ const DOCKER_PATHS = [
  * escalation, and limits on processes, memory and CPU. Only the build
  * directory is shared. Pure, so it can be tested.
  */
-export function runArgs(context: string, name: string, work: string, command: string[]): string[] {
+export function runArgs(context: string, name: string, work: string, command: string[], image: SandboxImage): string[] {
 	return [
 		...(context ? ["--context", context] : []),
 		"run", "--rm", "--name", name, "--platform", "linux/amd64",
@@ -88,12 +108,12 @@ export function runArgs(context: string, name: string, work: string, command: st
 		"--pids-limit", "64", "--memory", "512m", "--cpus", "1",
 		"-e", "HOME=/tmp",
 		"-v", `${work}:/work`, "-w", "/work",
-		BUILDER_IMAGE, ...command,
+		image.tag, ...command,
 	];
 }
 
 export type SandboxStatus =
-	| { ok: true; server: string; builder: boolean }
+	| { ok: true; server: string }
 	| { ok: false; error: string };
 
 export class Sandbox {
@@ -110,25 +130,32 @@ export class Sandbox {
 		return c ? ["--context", c] : [];
 	}
 
-	/** Whether Docker answers, and whether the builder image is there. */
+	/** Whether Docker answers at all. Which images exist is a separate question. */
 	async status(): Promise<SandboxStatus> {
 		const info = await this.exec(this.docker(), [...this.ctx(), "info", "--format", "{{.ServerVersion}}"], { timeoutMs: 20000 });
 		if (info.code !== 0) {
 			const why = (info.stderr || info.stdout).trim().split("\n").pop() ?? "";
 			return { ok: false, error: `Docker is not answering${why ? `: ${why.slice(0, 200)}` : ""}` };
 		}
-		const image = await this.exec(this.docker(), [...this.ctx(), "image", "inspect", BUILDER_IMAGE, "--format", "{{.Id}}"], { timeoutMs: 20000 });
-		return { ok: true, server: info.stdout.trim(), builder: image.code === 0 };
+		return { ok: true, server: info.stdout.trim() };
 	}
 
-	/** Builds the builder image. It downloads a Debian base and gcc, once. */
-	async buildImage(scratch: string): Promise<RunResult> {
+	/** Whether one toolchain's image has been built here already. */
+	async hasImage(image: SandboxImage): Promise<boolean> {
+		const found = await this.exec(
+			this.docker(), [...this.ctx(), "image", "inspect", image.tag, "--format", "{{.Id}}"], { timeoutMs: 20000 }
+		);
+		return found.code === 0;
+	}
+
+	/** Builds one toolchain's image. It downloads a base and the tools, once. */
+	async buildImage(scratch: string, image: SandboxImage): Promise<RunResult> {
 		const dir = fs.mkdtempSync(path.join(scratch, "builder-"));
 		try {
-			fs.writeFileSync(path.join(dir, "Dockerfile"), BUILDER_DOCKERFILE);
+			fs.writeFileSync(path.join(dir, "Dockerfile"), image.dockerfile);
 			return await this.exec(
 				this.docker(),
-				[...this.ctx(), "build", "--platform", "linux/amd64", "-t", BUILDER_IMAGE, dir],
+				[...this.ctx(), "build", "--platform", "linux/amd64", "-t", image.tag, dir],
 				{ timeoutMs: 20 * 60 * 1000 }
 			);
 		} finally {
@@ -137,9 +164,9 @@ export class Sandbox {
 	}
 
 	/** Runs one command in a fresh locked-down container, with `work` as its /work. */
-	async run(work: string, command: string[], timeoutMs: number): Promise<RunResult> {
+	async run(work: string, command: string[], timeoutMs: number, image: SandboxImage): Promise<RunResult> {
 		const name = `recall-lab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-		const res = await this.exec(this.docker(), runArgs(this.config().context.trim(), name, work, command), { timeoutMs });
+		const res = await this.exec(this.docker(), runArgs(this.config().context.trim(), name, work, command, image), { timeoutMs });
 		// A killed docker client can leave its container running.
 		if (res.timedOut) await this.exec(this.docker(), [...this.ctx(), "rm", "-f", name], { timeoutMs: 20000 });
 		return res;

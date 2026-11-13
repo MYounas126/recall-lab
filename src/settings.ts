@@ -1,6 +1,7 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type RecallLabPlugin from "./main";
 import { INSTALL_HINT } from "./claude";
+import { imagesNeeded } from "./kinds";
 
 export type Strictness = "lenient" | "normal" | "brutal";
 
@@ -403,15 +404,24 @@ export class RecallLabSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Check the builder")
-			.setDesc("Confirms Docker answers and the builder image is ready.")
+			.setDesc("Confirms Docker answers, and says which toolchains are ready.")
 			.addButton((b) =>
 				b.setButtonText("Test").onClick(async () => {
 					b.setDisabled(true).setButtonText("Testing…");
 					try {
 						const s = await this.plugin.sandbox.status();
-						if (!s.ok) new Notice(`Recall Lab: ${s.error}`, 15000);
-						else if (!s.builder) new Notice(`Docker ${s.server} is up. The builder image is not built yet; it is built the first time you ask for a challenge.`, 15000);
-						else new Notice(`Docker ${s.server} is up, and the builder image is ready.`, 9000);
+						if (!s.ok) { new Notice(`Recall Lab: ${s.error}`, 15000); return; }
+						// Each toolchain is built the first time a challenge needs it,
+						// so a missing one is normal rather than a fault to report.
+						const images = imagesNeeded();
+						const ready: string[] = [];
+						const waiting: string[] = [];
+						for (const image of images) {
+							(await this.plugin.sandbox.hasImage(image) ? ready : waiting).push(image.label);
+						}
+						const built = ready.length ? `${ready.join(" and ")} ready` : "no toolchain built yet";
+						const rest = waiting.length ? `; ${waiting.join(" and ")} will be built the first time a challenge needs it` : "";
+						new Notice(`Docker ${s.server} is up, ${built}${rest}.`, waiting.length ? 15000 : 9000);
 					} finally {
 						b.setDisabled(false).setButtonText("Test");
 					}

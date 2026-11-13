@@ -11,6 +11,13 @@ and gives them a version, about once a month — not once per change.
 
 ### Changed
 
+- **A kind of challenge brings its own toolchain.** The container image was a
+  constant baked into the sandbox: one image, holding a C compiler, for
+  everything. A challenge in any other language had nowhere to say what it
+  needed. A kind now names its own image, only the toolchains you actually
+  build challenges in are ever downloaded, and two kinds sharing one are
+  built and reported once. Settings → Check the builder now says which
+  toolchains are ready instead of naming a single builder.
 - **One loop for every kind of verified challenge.** Reversing and
   exploitation challenges each had their own copy of the same ninety-line
   pipeline: ask Claude, check the reply, name the lab, hide the answer, build

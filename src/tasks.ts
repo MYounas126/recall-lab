@@ -8,6 +8,7 @@ import { parseStudent, parseTeachScore, studentPrompt, teachScorePrompt } from "
 import { LabStore, describeToolchain, detectToolchain, flagCodes, hashFlag, leaksFlag, nudges, validateLab, verifyCheck, writtenInOrder } from "./labs";
 import { Sandbox } from "./sandbox";
 import { CRACKME, briefFooter } from "./crackme";
+import { kindOf } from "./kinds";
 import { PWN } from "./pwn";
 import {
 	CHECK_SCRIPT, ExerciseKind, ExerciseReply, lastWords, redact, showsFlag, writeInputs, writeSources,
@@ -185,7 +186,7 @@ export class Tasks {
 			if (unsafe) return { error: unsafe };
 			fs.writeFileSync(nodePath.join(work, CHECK_SCRIPT), prepared.script, "utf8");
 
-			const run = await this.sandbox.run(work, ["sh", CHECK_SCRIPT], k.timeoutMs);
+			const run = await this.sandbox.run(work, ["sh", CHECK_SCRIPT], k.timeoutMs, k.image);
 			if (run.timedOut) return { error: `it took too long to ${k.verb}` };
 			const verdict = k.verdict(run.stdout, r.flag, tier);
 			if (verdict.problem) {
@@ -389,7 +390,8 @@ export class Tasks {
 			if (unsafe) return { error: unsafe };
 			const script = `set -eu\ngcc ${lab.build.cflags.map((c) => `'${c.replace(/'/g, "'\\''")}'`).join(" ")} -o '${lab.build.output}' ${lab.files.map((f) => `'${f.path}'`).join(" ")}`;
 			fs.writeFileSync(nodePath.join(work, CHECK_SCRIPT), script, "utf8");
-			const run = await this.sandbox.run(work, ["sh", CHECK_SCRIPT], 120000);
+			// Rebuilt in the toolchain its own kind uses, not whichever came first.
+			const run = await this.sandbox.run(work, ["sh", CHECK_SCRIPT], 120000, (kindOf(lab) ?? CRACKME).image);
 			const built = nodePath.join(work, lab.build.output);
 			if (run.code !== 0 || !fs.existsSync(built)) {
 				return { error: (run.stderr || run.stdout).trim().split("\n").slice(-2).join(" ").slice(0, 300) || "it did not build" };
