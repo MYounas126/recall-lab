@@ -17,6 +17,11 @@ const lab = (id: string, axis: string, tier: Tier = "easy"): Lab => ({
 const solved = (hints = 0, attempts = 0): LabProgress =>
 	({ labId: "x", attempts, hintsUsed: hints, solvedAt: "2026-10-20T10:00:00.000Z", firstOpenedAt: "2026-10-20T09:00:00.000Z" });
 const open = (): LabProgress => ({ labId: "x", attempts: 1, hintsUsed: 0, firstOpenedAt: "2026-10-20T09:00:00.000Z" });
+/** Drawn and nothing else: the page stamps this by itself. */
+const seen = (): LabProgress => ({ labId: "x", attempts: 0, hintsUsed: 0, firstOpenedAt: "2026-10-20T09:00:00.000Z" });
+const hinted = (): LabProgress => ({ labId: "x", attempts: 0, hintsUsed: 1, firstOpenedAt: "2026-10-20T09:00:00.000Z" });
+const taken = (): LabProgress =>
+	({ labId: "x", attempts: 0, hintsUsed: 0, firstOpenedAt: "2026-10-20T09:00:00.000Z", workedAt: "2026-10-20T09:30:00.000Z" });
 const quit = (): LabProgress => ({ labId: "x", attempts: 0, hintsUsed: 0, gaveUpAt: "2026-10-20T11:00:00.000Z", firstOpenedAt: "2026-10-20T09:00:00.000Z" });
 
 test("each axis counts what was solved, what is open, and what was given up", () => {
@@ -24,8 +29,8 @@ test("each axis counts what was solved, what is open, and what was given up", ()
 	const p = practice(axes, labs, { a: solved(), b: solved(1), c: open(), d: quit() });
 	const regs = p.find((x) => x.axis.id === "regs")!;
 	assert.deepEqual(
-		{ total: regs.total, solved: regs.solved, started: regs.started, gaveUp: regs.gaveUp },
-		{ total: 3, solved: 2, started: 1, gaveUp: 0 }
+		{ total: regs.total, solved: regs.solved, started: regs.started, looked: regs.looked, gaveUp: regs.gaveUp },
+		{ total: 3, solved: 2, started: 1, looked: 0, gaveUp: 0 }
 	);
 	assert.equal(regs.score, 93, "the mean of 100 and 85, a hint costing 15");
 	assert.equal(regs.best, "brutal", "the hardest one solved");
@@ -48,12 +53,29 @@ test("a lab never opened is not the same as one abandoned", () => {
 	assert.equal(describePractice(p), "2 never opened");
 });
 
+test("looking at a lab is not starting it", () => {
+	// The lab page stamps firstOpenedAt as it draws, so a browse through the
+	// list would otherwise read as three labs abandoned half-finished.
+	const labs = [lab("a", "regs"), lab("b", "regs"), lab("c", "regs")];
+	const p = practice(axes, labs, { a: seen(), b: seen(), c: seen() })[0];
+	assert.deepEqual({ started: p.started, looked: p.looked }, { started: 0, looked: 3 });
+	assert.equal(describePractice(p), "3 of 3 opened, none started");
+});
+
+test("what counts as started: a hint, a flag, or taking it to your own tools", () => {
+	const labs = [lab("a", "regs"), lab("b", "regs"), lab("c", "regs"), lab("d", "regs")];
+	const p = practice(axes, labs, { a: hinted(), b: open(), c: taken(), d: seen() })[0];
+	assert.deepEqual({ started: p.started, looked: p.looked }, { started: 3, looked: 1 });
+	assert.equal(describePractice(p), "3 of 4 started");
+});
+
 test("each axis's record reads as a short line", () => {
 	const of = (labs: Lab[], prog: Record<string, LabProgress>) => describePractice(practice(axes, labs, prog)[0]);
 	assert.equal(of([], {}), "no labs yet");
 	assert.equal(of([lab("a", "regs")], { a: solved() }), "1 of 1 solved · 100% · hardest easy");
 	assert.equal(of([lab("a", "regs", "brutal")], { a: solved(2) }), "1 of 1 solved · 70% · hardest brutal");
-	assert.equal(of([lab("a", "regs")], { a: open() }), "1 of 1 open");
+	assert.equal(of([lab("a", "regs")], { a: open() }), "1 of 1 started");
+	assert.equal(of([lab("a", "regs")], { a: seen() }), "1 of 1 opened, none started");
 	assert.equal(of([lab("a", "regs")], { a: quit() }), "1 given up");
 });
 

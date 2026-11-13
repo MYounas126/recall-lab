@@ -118,4 +118,14 @@ globals.getComputedStyle = win.getComputedStyle.bind(win);
 globals.requestAnimationFrame = (cb: () => void) => setTimeout(cb, 0);
 globals.CSS = { escape: (s: string) => s.replace(/["\\]/g, "\\$&") };
 
+/**
+ * Neither jsdom nor Node has a clipboard, and the view copies paths and code,
+ * so stand one in and keep what it was asked to copy.
+ */
+export const copied: string[] = [];
+Object.defineProperty(globalThis, "navigator", {
+	configurable: true,
+	value: { ...(globalThis.navigator ?? {}), clipboard: { writeText: async (text: string) => { copied.push(text); } } },
+});
+
 export { win, doc };

@@ -6,7 +6,7 @@ import { shuffled } from "./util";
 import { QuestionScore, renderRadar, scoreAxes, scoreCourses, weakestTested, untested, withBefore, AxisScore } from "./radar";
 import {
 	Attempt, Bank, BlurtResult, Confidence, Course, ExamItem, Lab, LabKind, LabProgress, ProgressFile, Question, SessionSummary, Tier,
-	TeachResult, Turn, idOf, isBinaryLab, isPwnLab, labScore, letterGrade, qkey,
+	TeachResult, Turn, idOf, isBinaryLab, isPwnLab, labScore, labStarted, letterGrade, qkey,
 } from "./types";
 import { AnswerIndex, calibration } from "./history";
 import {
@@ -1281,7 +1281,7 @@ export class RecallLabView extends ItemView {
 	}
 
 	/** All of a course's labs in one place, with their state. */
-	private renderLabPanel(main: HTMLElement, folder: string, progress: { labs?: Record<string, { solvedAt?: string; gaveUpAt?: string; attempts: number; hintsUsed: number }> }): void {
+	private renderLabPanel(main: HTMLElement, folder: string, progress: { labs?: Record<string, LabProgress> }): void {
 		const prefix = folder.replace(/\/+$/, "") + "/";
 		const labs = this.allLabs.filter((l) => l.note.startsWith(prefix));
 
@@ -1338,18 +1338,22 @@ export class RecallLabView extends ItemView {
 			body.createDiv({ cls: "rl-lab-title", text: lab.title });
 			const note = lab.note.split("/").pop()!.replace(/\.md$/, "");
 			const state = p?.solvedAt
-				? `solved · ${labScore(p as never)}%`
+				? `solved · ${labScore(p)}%`
 				: p?.gaveUpAt
 					? "gave up"
 					: p?.attempts
 						? `${p.attempts} wrong so far`
-						: "not started";
+						: labStarted(p)
+							? "started"
+							: p?.firstOpenedAt
+								? "opened, not started"
+								: "not started";
 			body.createDiv({ cls: "rl-lab-meta", text: `${note} · ${state}${lab.minutes ? ` · ~${lab.minutes} min` : ""}` });
 
 			const right = row.createDiv({ cls: "rl-note-actions" });
 			if (p?.solvedAt) setIcon(right.createSpan({ cls: "rl-note-done" }), "check-circle");
 			new ButtonComponent(right)
-				.setButtonText(p?.solvedAt ? "Review" : p?.attempts ? "Continue" : "Open lab")
+				.setButtonText(p?.solvedAt ? "Review" : labStarted(p) ? "Continue" : "Open lab")
 				.setCta()
 				.onClick(() => { this.openLab = lab; this.screen = "lab"; void this.render(); });
 		}
@@ -2480,11 +2484,21 @@ export class RecallLabView extends ItemView {
 
 	private async renderLab(main: HTMLElement, lab: Lab): Promise<void> {
 		const prog = await this.plugin.store.labProgress(lab.id);
+		// A record of looking, nothing more. Drawing this page is not work, so
+		// it must not mark the lab started — see labStarted().
 		if (!prog.firstOpenedAt) {
 			prog.firstOpenedAt = new Date().toISOString();
 			await this.plugin.store.saveLabProgress(prog);
-			this.plugin.log.info("lab opened", { lab: lab.id, tier: lab.tier, title: lab.title });
+			this.plugin.log.info("lab viewed", { lab: lab.id, tier: lab.tier, title: lab.title });
 		}
+		// Taking the challenge out to your own tools is work, and is the one
+		// thing a binary lab can record besides hints and flags.
+		const markWorked = async () => {
+			if (prog.workedAt) return;
+			prog.workedAt = new Date().toISOString();
+			await this.plugin.store.saveLabProgress(prog);
+			this.plugin.log.info("lab taken up", { lab: lab.id, tier: lab.tier });
+		};
 
 		const head = main.createDiv({ cls: "rl-head" });
 		const back = head.createEl("a", { cls: "rl-link", text: "← back" });
@@ -2511,7 +2525,7 @@ export class RecallLabView extends ItemView {
 		// A binary challenge is the binary: its source is the answer, and stays
 		// hidden until the flag is in hand. A source lab shows its file instead,
 		// because those are meant to be solved by reading.
-		if (isBinaryLab(lab)) this.renderChallengeFiles(main, lab, Boolean(prog.solvedAt || prog.gaveUpAt));
+		if (isBinaryLab(lab)) this.renderChallengeFiles(main, lab, Boolean(prog.solvedAt || prog.gaveUpAt), markWorked);
 		else for (const f of lab.files) {
 			const panel = main.createDiv({ cls: "rl-panel rl-challenge" });
 			const ph = panel.createDiv({ cls: "rl-panel-head" });
@@ -2638,7 +2652,7 @@ export class RecallLabView extends ItemView {
 					const where = this.plugin.labs.materialise(lab);
 					this.plugin.log.info("lab workspace written", { lab: lab.id, dir: where, files: lab.files.length });
 					new Notice(`Written to ${where}`, 9000);
-					void this.render();
+					void markWorked().then(() => this.render());
 				} catch (e) {
 					this.plugin.log.error("lab setup failed", { lab: lab.id, error: String(e) });
 					new Notice(`Could not write the file: ${String(e)}`, 12000);
@@ -2649,7 +2663,7 @@ export class RecallLabView extends ItemView {
 	}
 
 	/** Where to find a binary challenge, and its source once it can no longer spoil it. */
-	private renderChallengeFiles(main: HTMLElement, lab: Lab, revealed: boolean): void {
+	private renderChallengeFiles(main: HTMLElement, lab: Lab, revealed: boolean, onWorked: () => Promise<void>): void {
 		const dir = this.plugin.labs.dir(lab);
 		const binary = `${dir}/${lab.build!.output}`;
 		const panel = main.createDiv({ cls: "rl-panel rl-challenge" });
@@ -2671,6 +2685,9 @@ export class RecallLabView extends ItemView {
 		const actions = panel.createDiv({ cls: "rl-actions" });
 		const copyPath = new ButtonComponent(actions).setButtonText("Copy the path");
 		copyPath.onClick(() => {
+			// Recorded before the copy: taking the path is the deliberate act,
+			// and a clipboard the platform refuses must not lose it.
+			void onWorked();
 			void navigator.clipboard.writeText(binary);
 			copyPath.setButtonText("Copied");
 			window.setTimeout(() => { copyPath.setButtonText("Copy the path"); }, 1500);
@@ -2680,7 +2697,7 @@ export class RecallLabView extends ItemView {
 			const again = new ButtonComponent(actions).setButtonText("Rebuild it");
 			again.onClick(async () => {
 				again.setDisabled(true);
-				if (await this.plugin.rebuildChallenge(lab)) await this.render();
+				if (await this.plugin.rebuildChallenge(lab)) { await onWorked(); await this.render(); }
 				else again.setDisabled(false);
 			});
 		}
