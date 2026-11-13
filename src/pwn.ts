@@ -1,4 +1,6 @@
 import { Course, Tier } from "./types";
+import { ExerciseKind, plainName } from "./exercise";
+import { textOf } from "./util";
 
 /**
  * Exploitation challenges: a vulnerable x86-64 Linux program with a bug you
@@ -214,3 +216,38 @@ export function briefFooter(output: string, flagFormat: string, tier: Tier): str
 		`Submit the flag (\`${flagFormat}\`) in Recall Lab.`,
 	].join("\n");
 }
+
+/**
+ * Exploitation, as one kind of verified exercise. The tier picks the
+ * protections, never the generator, and the challenge is kept only if the
+ * program builds, keeps its flag out of the binary, survives ordinary input,
+ * has the win path to aim at, really does carry the bug, and came out with
+ * the protections its tier promises.
+ */
+export const PWN: ExerciseKind = {
+	kind: "pwn",
+	tag: "pwn",
+	verb: "build and check",
+	timeoutMs: 300000,
+	prompt: pwnPrompt,
+	prepare(reply, sources, tier) {
+		const benign = (reply.benign as { stdin?: unknown } | undefined)?.stdin;
+		const probe = (reply.probe as { stdin?: unknown } | undefined)?.stdin;
+		if (typeof benign !== "string" || typeof probe !== "string") {
+			return "it came back without the inputs needed to check it";
+		}
+		const output = textOf(reply.output).trim();
+		if (!plainName(output)) return "its program name is not a plain file name";
+		return {
+			// The protections are the tier's, never the generator's choice.
+			build: { cflags: PWN_CFLAGS[tier], output },
+			inputs: { [BENIGN_INPUT]: benign, [PROBE_INPUT]: probe },
+			script: checkScript(sources.map((f) => f.path), output, tier),
+		};
+	},
+	verdict(stdout, flag, tier) {
+		const out = parseCheck(stdout);
+		return { problem: challengeProblem(out, flag, tier), compiled: Boolean(out.strings || out.benign) };
+	},
+	footer: (lab, tier) => briefFooter(lab.build!.output, lab.flagFormat, tier),
+};

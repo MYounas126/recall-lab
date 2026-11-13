@@ -1,4 +1,5 @@
 import { Course, Lab, LabBuild, Tier } from "./types";
+import { ExerciseKind } from "./exercise";
 import { textOf } from "./util";
 
 /**
@@ -204,3 +205,36 @@ export function briefFooter(lab: Lab): string {
 		`Submit the flag (\`${lab.flagFormat}\`) in Recall Lab.`,
 	].join("\n");
 }
+
+/**
+ * Reversing, as one kind of verified exercise: Claude designs the program,
+ * the sandbox compiles it and runs it once on the input that is meant to
+ * solve it, and it is kept only if the flag really comes out and cannot be
+ * read straight out of the binary. The solving input is never stored.
+ */
+export const CRACKME: ExerciseKind = {
+	kind: "binary",
+	tag: "ctf",
+	verb: "build and run",
+	timeoutMs: 180000,
+	prompt: crackmePrompt,
+	prepare(reply, sources) {
+		const solve = (reply.solve as { stdin?: unknown } | undefined)?.stdin;
+		if (typeof solve !== "string") return "it came back without the input that solves it";
+		const build = parseBuild(reply.build);
+		if (typeof build === "string") return build;
+		return {
+			build,
+			inputs: { [SOLVE_INPUT]: solve },
+			script: buildScript(sources.map((f) => f.path), build),
+		};
+	},
+	verdict(stdout, flag) {
+		return {
+			problem: challengeProblem(parseBuildOutput(stdout), flag),
+			// Without the strings marker the script never reached the compile's end.
+			compiled: stdout.includes(MARK.strings),
+		};
+	},
+	footer: (lab) => briefFooter(lab),
+};

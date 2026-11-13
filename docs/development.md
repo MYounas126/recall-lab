@@ -34,12 +34,48 @@ To try a build in Obsidian:
 | `src/memory.ts` | The FSRS review schedule, rebuilt from the answer history. |
 | `src/radar.ts`, `src/notemap.ts` | The skill radar, and the memory dots on headings. |
 | `src/gates.ts` | The tier gates: which tiers of a quiz are open. |
+| `src/exercise.ts` | The loop every verified exercise goes through, and the contract a kind of exercise fills in. |
 | `src/crackme.ts` | Reversing challenges: the prompt, and the checks that one can be solved. |
 | `src/pwn.ts` | Exploitation challenges: the prompt, the per-tier protections, and the checks that the bug is real. |
 | `src/sandbox.ts` | The container challenges are built and checked in. |
 | `src/labs.ts`, `highlights.ts`, `blurt.ts`, `teach.ts`, `leeches.ts`, `variants.ts`, `guided.ts`, `recall.ts` | One feature each. |
 | `test/` | Tests (see [Testing](#testing)). |
 | `scripts/` | Release helpers (`check-release.mjs`, `release-notes.mjs`, `version-bump.mjs`) and the vault smoke test (`smoke-test.js`). |
+
+## Adding a kind of exercise
+
+Every challenge Recall Lab writes goes through one loop, in
+`Tasks.generateExercise`: ask Claude for one, check the reply carries what it
+must, name the lab, take the answer out of everything shown before it is
+solved, build and check it in a throwaway container, and keep it only if the
+check says it is sound. The build directory is cleared away either way.
+
+A new kind of exercise is an `ExerciseKind` (see `src/exercise.ts`), not
+another copy of that loop. It answers four questions:
+
+| Member | What it decides |
+|---|---|
+| `prompt()` | What Claude is asked for. |
+| `prepare()` | What the sandbox needs on disk: the build, the input files, and the script that checks it. Returns a string instead to refuse the reply. |
+| `verdict()` | Whether what came back is worth handing over, read from the script's own output. |
+| `footer()` | What the learner is told once the file is on their machine. |
+
+`src/crackme.ts` exports `CRACKME` and `src/pwn.ts` exports `PWN`; both are
+about thirty lines. Everything else — the flag, the source, the redaction,
+the guard that stops a generated path escaping the build directory, the
+container's limits, the clean-up — belongs to the loop and applies to every
+kind automatically. `test/exercise.test.ts` proves that by running a third,
+non-C kind through the loop and checking the loop's own rules still bite.
+
+Two things the loop does not yet carry, and which a kind outside C would
+need:
+
+- **The builder image holds a compiler and nothing else** (`src/sandbox.ts`).
+  A kind that needs another toolchain needs that in the image, and
+  `BUILDER_IMAGE`'s tag bumped.
+- **Finishing means submitting a flag.** A kind whose win condition is
+  "hidden tests pass" needs its own shape in `LabProgress` and on the lab
+  page, not just a descriptor.
 
 ## Testing
 
