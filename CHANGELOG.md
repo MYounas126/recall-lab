@@ -9,6 +9,21 @@ and gives them a version, about once a month — not once per change.
 
 ## [Unreleased]
 
+### Changed
+
+- **One loop for every kind of verified challenge.** Reversing and
+  exploitation challenges each had their own copy of the same ninety-line
+  pipeline: ask Claude, check the reply, name the lab, hide the answer, build
+  and check it in a container, keep it only if it is sound. The two copies
+  had already drifted. There is now one loop, in `Tasks.generateExercise`,
+  and a kind of challenge is a small descriptor saying what to ask for, what
+  the sandbox needs, what counts as sound, and what the learner is told.
+  Nothing about the two existing kinds changes — the whole challenge test
+  suite passes untouched — but a third kind is now a descriptor rather than
+  another copy of the pipeline, and the rules that matter (the flag never
+  leaking, a generated path never escaping the build directory) are written
+  once and apply to every kind.
+
 ### Fixed
 
 - **A lab you only looked at no longer counts as one you abandoned.** The lab

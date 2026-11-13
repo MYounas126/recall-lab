@@ -7,11 +7,11 @@ import { Section, blurtPrompt, headingsOf, parseBlurt, sectionsOf } from "./blur
 import { parseStudent, parseTeachScore, studentPrompt, teachScorePrompt } from "./teach";
 import { LabStore, describeToolchain, detectToolchain, flagCodes, hashFlag, leaksFlag, nudges, validateLab, verifyCheck, writtenInOrder } from "./labs";
 import { Sandbox } from "./sandbox";
-import { MARK, SOLVE_INPUT, briefFooter, buildScript, challengeProblem, crackmePrompt, parseBuild, parseBuildOutput } from "./crackme";
+import { CRACKME, briefFooter } from "./crackme";
+import { PWN } from "./pwn";
 import {
-	BENIGN_INPUT, PROBE_INPUT, PWN_CFLAGS, checkScript, challengeProblem as pwnProblem, briefFooter as pwnFooter,
-	parseCheck, pwnPrompt,
-} from "./pwn";
+	CHECK_SCRIPT, ExerciseKind, ExerciseReply, lastWords, redact, showsFlag, writeInputs, writeSources,
+} from "./exercise";
 import * as fs from "fs";
 import * as nodePath from "path";
 import type { Strictness } from "./settings";
@@ -110,36 +110,59 @@ export class Tasks {
 	 * The input that solves it is never stored: that is the answer.
 	 */
 	async generateCrackme(notePath: string, course: Course, tier: Tier, avoid: string[] = []): Promise<Lab | { error: string }> {
+		return this.generateExercise(CRACKME, notePath, course, tier, avoid);
+	}
+
+	/**
+	 * Writes one exploitation challenge for a note: a vulnerable program with
+	 * a win path to reach. Recall Lab never writes or runs an exploit; it
+	 * proves the bug is really there with a sanitizer build and hands the
+	 * binary over.
+	 */
+	async generatePwn(notePath: string, course: Course, tier: Tier, avoid: string[] = []): Promise<Lab | { error: string }> {
+		return this.generateExercise(PWN, notePath, course, tier, avoid);
+	}
+
+	/**
+	 * The loop every verified exercise goes through, whatever kind it is.
+	 *
+	 * Ask for one, check the reply carries what it must, name it, take the
+	 * answer out of everything shown before it is solved, build and check it
+	 * in a throwaway container, and keep it only if the kind says it is
+	 * sound. The build directory is cleared away either way.
+	 *
+	 * What differs between kinds lives in the ExerciseKind, not in here, so
+	 * a new kind of exercise is one descriptor and no new pipeline.
+	 */
+	async generateExercise(
+		k: ExerciseKind, notePath: string, course: Course, tier: Tier, avoid: string[]
+	): Promise<Lab | { error: string }> {
 		if (!this.sandbox || !this.labs) return { error: "the challenge builder is not available" };
 		const file = this.app.vault.getAbstractFileByPath(notePath);
 		if (!(file instanceof TFile)) return { error: `${notePath} is not a note.` };
 		const content = await this.app.vault.cachedRead(file);
 		const title = file.basename;
 
-		const res = await this.cli.askJson<Lab & { flag?: string; solve?: { stdin?: string }; build?: unknown }>(
-			crackmePrompt(title, content, course, tier, avoid), 480000
-		);
+		const res = await this.cli.askJson<ExerciseReply>(k.prompt(title, content, course, tier, avoid), 480000);
 		if (!res.ok) return { error: res.error };
 		const r = res.data;
 
 		if (!r?.flag || typeof r.flag !== "string") return { error: "it came back without a flag" };
-		const solveInput = typeof r.solve?.stdin === "string" ? r.solve.stdin : null;
-		if (solveInput === null) return { error: "it came back without the input that solves it" };
 		const sources = Array.isArray(r.files) ? r.files.filter((f) => f?.path && typeof f.content === "string") : [];
 		if (!sources.length) return { error: "it came back without source" };
-		const build = parseBuild(r.build);
-		if (typeof build === "string") return { error: build };
+		const prepared = k.prepare(r, sources, tier);
+		if (typeof prepared === "string") return { error: prepared };
 
 		const axes = new Set(course.axes.map((a) => a.id));
 		const lab: Lab = {
-			id: `${course.id}-${slug(title)}-ctf-${hashFlag(r.flag).slice(0, 6)}`,
+			id: `${course.id}-${slug(title)}-${k.tag}-${hashFlag(r.flag).slice(0, 6)}`,
 			courseId: course.id,
 			note: notePath,
 			title: String(r.title ?? "Challenge"),
-			axis: axes.has(r.axis) ? r.axis : course.axes[0].id,
+			axis: typeof r.axis === "string" && axes.has(r.axis) ? r.axis : course.axes[0].id,
 			tier,
-			kind: "binary",
-			build,
+			kind: k.kind,
+			build: prepared.build,
 			brief: String(r.brief ?? ""),
 			setup: "",
 			files: sources,
@@ -149,47 +172,30 @@ export class Tasks {
 			solution: String(r.solution ?? ""),
 			minutes: typeof r.minutes === "number" ? r.minutes : undefined,
 		};
-
-		// Anything shown before the flag is in hand is redacted, the same way a
-		// source lab's is. The source itself is hidden until it is solved.
-		const redact = (text: string): string => text.split(r.flag!).join(`\`${lab.flagFormat}\``);
-		lab.brief = redact(lab.brief);
-		lab.solution = redact(lab.solution);
-		lab.hints = nudges(lab.hints.map(redact));
-		// Checked after redacting, not through it: what is left is what you see.
-		// The title is never redacted — a flag in it means the challenge is wrong.
-		if ([lab.brief, ...lab.hints, lab.title].join("\n").includes(r.flag)) {
-			return { error: "it still shows its flag before the challenge is solved" };
-		}
+		// Redact first, then trim: a hint that named the flag reads as
+		// `flag{...}` once redacted, which is not a nudge, so it is dropped
+		// rather than shown with a hole in it.
+		redact(lab, r.flag);
+		lab.hints = nudges(lab.hints);
+		if (showsFlag(lab, r.flag)) return { error: "it still shows its flag before the challenge is solved" };
 
 		const work = this.labs.buildScratch();
 		try {
-			for (const f of sources) {
-				const target = nodePath.join(work, f.path);
-				if (!nodePath.resolve(target).startsWith(nodePath.resolve(work) + nodePath.sep)) {
-					return { error: `its source path "${f.path}" tries to escape the build` };
-				}
-				fs.mkdirSync(nodePath.dirname(target), { recursive: true });
-				fs.writeFileSync(target, f.content, "utf8");
-			}
-			fs.writeFileSync(nodePath.join(work, SOLVE_INPUT), solveInput, "utf8");
-			fs.writeFileSync(nodePath.join(work, "build.sh"), buildScript(sources.map((f) => f.path), build), "utf8");
+			const unsafe = writeSources(work, sources) ?? writeInputs(work, prepared.inputs);
+			if (unsafe) return { error: unsafe };
+			fs.writeFileSync(nodePath.join(work, CHECK_SCRIPT), prepared.script, "utf8");
 
-			const run = await this.sandbox.run(work, ["sh", "build.sh"], 180000);
-			if (run.timedOut) return { error: "it took too long to build and run" };
-			const out = parseBuildOutput(run.stdout);
-			const problem = challengeProblem(out, r.flag);
-			if (problem) {
+			const run = await this.sandbox.run(work, ["sh", CHECK_SCRIPT], k.timeoutMs);
+			if (run.timedOut) return { error: `it took too long to ${k.verb}` };
+			const verdict = k.verdict(run.stdout, r.flag, tier);
+			if (verdict.problem) {
 				// A challenge that never compiled has only the compiler to explain it.
-				const compiler = run.stdout.includes(MARK.strings)
-					? ""
-					: `: ${(run.stderr || run.stdout).trim().split("\n").slice(-3).join(" ").slice(0, 300)}`;
-				return { error: problem + compiler };
+				return { error: verdict.problem + (verdict.compiled ? "" : `: ${lastWords(run)}`) };
 			}
 
-			const built = nodePath.join(work, build.output);
+			const built = nodePath.join(work, prepared.build.output);
 			if (!fs.existsSync(built)) return { error: "it built nothing" };
-			this.labs.placeBinary(lab, built, `# ${lab.title}\n\n${lab.brief}${briefFooter(lab)}\n`);
+			this.labs.placeBinary(lab, built, `# ${lab.title}\n\n${lab.brief}${k.footer(lab, tier)}\n`);
 		} finally {
 			fs.rmSync(work, { recursive: true, force: true });
 		}
@@ -373,112 +379,17 @@ export class Tasks {
 	 * build under the address sanitizer — that the bug is really there. No
 	 * exploit is written or run: that part is yours.
 	 */
-	async generatePwn(notePath: string, course: Course, tier: Tier, avoid: string[] = []): Promise<Lab | { error: string }> {
-		if (!this.sandbox || !this.labs) return { error: "the challenge builder is not available" };
-		const file = this.app.vault.getAbstractFileByPath(notePath);
-		if (!(file instanceof TFile)) return { error: `${notePath} is not a note.` };
-		const content = await this.app.vault.cachedRead(file);
-		const title = file.basename;
-
-		const res = await this.cli.askJson<
-			Lab & { flag?: string; output?: unknown; benign?: { stdin?: string }; probe?: { stdin?: string } }
-		>(pwnPrompt(title, content, course, tier, avoid), 480000);
-		if (!res.ok) return { error: res.error };
-		const r = res.data;
-
-		if (!r?.flag || typeof r.flag !== "string") return { error: "it came back without a flag" };
-		const benign = typeof r.benign?.stdin === "string" ? r.benign.stdin : null;
-		const probe = typeof r.probe?.stdin === "string" ? r.probe.stdin : null;
-		if (benign === null || probe === null) return { error: "it came back without the inputs needed to check it" };
-		const sources = Array.isArray(r.files) ? r.files.filter((f) => f?.path && typeof f.content === "string") : [];
-		if (!sources.length) return { error: "it came back without source" };
-		const output = textOf(r.output).trim();
-		if (!/^[A-Za-z0-9._-]{1,64}$/.test(output) || output.startsWith(".")) {
-			return { error: "its program name is not a plain file name" };
-		}
-
-		const axes = new Set(course.axes.map((a) => a.id));
-		const lab: Lab = {
-			id: `${course.id}-${slug(title)}-pwn-${hashFlag(r.flag).slice(0, 6)}`,
-			courseId: course.id,
-			note: notePath,
-			title: String(r.title ?? "Challenge"),
-			axis: axes.has(r.axis) ? r.axis : course.axes[0].id,
-			tier,
-			kind: "pwn",
-			// The protections are the tier's, never the generator's choice.
-			build: { cflags: PWN_CFLAGS[tier], output },
-			brief: String(r.brief ?? ""),
-			setup: "",
-			files: sources,
-			hints: Array.isArray(r.hints) ? r.hints.map(String) : [],
-			flagHash: hashFlag(r.flag),
-			flagFormat: String(r.flagFormat ?? "flag{...}"),
-			solution: String(r.solution ?? ""),
-			minutes: typeof r.minutes === "number" ? r.minutes : undefined,
-		};
-
-		const redact = (text: string): string => text.split(r.flag!).join(`\`${lab.flagFormat}\``);
-		lab.brief = redact(lab.brief);
-		lab.solution = redact(lab.solution);
-		lab.hints = nudges(lab.hints.map(redact));
-		if ([lab.brief, ...lab.hints, lab.title].join("\n").includes(r.flag)) {
-			return { error: "it still shows its flag before the challenge is solved" };
-		}
-
-		const work = this.labs.buildScratch();
-		try {
-			for (const f of sources) {
-				const target = nodePath.join(work, f.path);
-				if (!nodePath.resolve(target).startsWith(nodePath.resolve(work) + nodePath.sep)) {
-					return { error: `its source path "${f.path}" tries to escape the build` };
-				}
-				fs.mkdirSync(nodePath.dirname(target), { recursive: true });
-				fs.writeFileSync(target, f.content, "utf8");
-			}
-			fs.writeFileSync(nodePath.join(work, BENIGN_INPUT), benign, "utf8");
-			fs.writeFileSync(nodePath.join(work, PROBE_INPUT), probe, "utf8");
-			fs.writeFileSync(nodePath.join(work, "check.sh"), checkScript(sources.map((f) => f.path), output, tier), "utf8");
-
-			const run = await this.sandbox.run(work, ["sh", "check.sh"], 300000);
-			if (run.timedOut) return { error: "it took too long to build and check" };
-			const out = parseCheck(run.stdout);
-			const problem = pwnProblem(out, r.flag, tier);
-			if (problem) {
-				const compiler = out.strings || out.benign
-					? ""
-					: `: ${(run.stderr || run.stdout).trim().split("\n").slice(-3).join(" ").slice(0, 300)}`;
-				return { error: problem + compiler };
-			}
-
-			const built = nodePath.join(work, output);
-			if (!fs.existsSync(built)) return { error: "it built nothing" };
-			this.labs.placeBinary(lab, built, `# ${lab.title}\n\n${lab.brief}${pwnFooter(output, lab.flagFormat, tier)}\n`);
-		} finally {
-			fs.rmSync(work, { recursive: true, force: true });
-		}
-
-		await this.writeFile(normalizePath(`${this.labsFolder()}/${lab.id}.json`), JSON.stringify(lab, null, 2) + "\n");
-		return lab;
-	}
-
 	/** Compiles a challenge again from the source kept with it, when its binary has gone. */
 	async rebuildCrackme(lab: Lab): Promise<string | { error: string }> {
 		if (!this.sandbox || !this.labs) return { error: "the challenge builder is not available" };
 		if (!lab.build) return { error: "that lab is not a binary challenge" };
 		const work = this.labs.buildScratch();
 		try {
-			for (const f of lab.files) {
-				const target = nodePath.join(work, f.path);
-				if (!nodePath.resolve(target).startsWith(nodePath.resolve(work) + nodePath.sep)) {
-					return { error: `its source path "${f.path}" tries to escape the build` };
-				}
-				fs.mkdirSync(nodePath.dirname(target), { recursive: true });
-				fs.writeFileSync(target, f.content, "utf8");
-			}
+			const unsafe = writeSources(work, lab.files);
+			if (unsafe) return { error: unsafe };
 			const script = `set -eu\ngcc ${lab.build.cflags.map((c) => `'${c.replace(/'/g, "'\\''")}'`).join(" ")} -o '${lab.build.output}' ${lab.files.map((f) => `'${f.path}'`).join(" ")}`;
-			fs.writeFileSync(nodePath.join(work, "build.sh"), script, "utf8");
-			const run = await this.sandbox.run(work, ["sh", "build.sh"], 120000);
+			fs.writeFileSync(nodePath.join(work, CHECK_SCRIPT), script, "utf8");
+			const run = await this.sandbox.run(work, ["sh", CHECK_SCRIPT], 120000);
 			const built = nodePath.join(work, lab.build.output);
 			if (run.code !== 0 || !fs.existsSync(built)) {
 				return { error: (run.stderr || run.stdout).trim().split("\n").slice(-2).join(" ").slice(0, 300) || "it did not build" };
