@@ -6,7 +6,7 @@ import * as path from "path";
 import {
 	MARK, SOLVE_INPUT, buildScript, challengeProblem, crackmePrompt, parseBuild, parseBuildOutput,
 } from "../src/crackme";
-import { BUILDER_IMAGE, Sandbox, runArgs } from "../src/sandbox";
+import { BUILDER_IMAGE, C_BUILDER, Sandbox, runArgs } from "../src/sandbox";
 import { LabStore, hashFlag } from "../src/labs";
 import { Tasks } from "../src/tasks";
 import type { Course, Lab } from "../src/types";
@@ -96,7 +96,7 @@ test("a challenge is kept only if the intended input prints the flag and `string
 // ------------------------------------------------------------ the sandbox
 
 test("a challenge is built with no network, a read-only system and no privileges", () => {
-	const args = runArgs("colima-ctf", "job", "/Users/me/RecallLab/labs/.build/c-1", ["sh", "build.sh"]);
+	const args = runArgs("colima-ctf", "job", "/Users/me/RecallLab/labs/.build/c-1", ["sh", "build.sh"], C_BUILDER);
 	const after = (flag: string) => args[args.indexOf(flag) + 1];
 	assert.deepEqual(args.slice(0, 2), ["--context", "colima-ctf"]);
 	assert.equal(after("--network"), "none");
@@ -107,7 +107,7 @@ test("a challenge is built with no network, a read-only system and no privileges
 	assert.equal(after("--memory"), "512m");
 	assert.equal(after("-v"), "/Users/me/RecallLab/labs/.build/c-1:/work", "only the build directory");
 	assert.deepEqual(args.slice(-3), [BUILDER_IMAGE, "sh", "build.sh"]);
-	assert.ok(!runArgs("", "job", "/w", ["sh"]).includes("--context"), "blank means the current context");
+	assert.ok(!runArgs("", "job", "/w", ["sh"], C_BUILDER).includes("--context"), "blank means the current context");
 });
 
 // -------------------------------------------------------- writing one end to end

@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as nodePath from "path";
 import { Course, Lab, LabBuild, LabFile, LabKind, Tier } from "./types";
+import { SandboxImage } from "./sandbox";
 
 /**
  * One verified exercise, whatever kind it is.
@@ -14,6 +15,7 @@ import { Course, Lab, LabBuild, LabFile, LabKind, Tier } from "./types";
  * A new kind of exercise is an ExerciseKind, not another copy of the loop.
  * What a kind must answer:
  *
+ *   - what toolchain it is built in              image
  *   - what to ask Claude for                     prompt()
  *   - what the sandbox needs on disk             prepare()
  *   - whether what came back is worth keeping    verdict()
@@ -59,6 +61,12 @@ export interface CheckVerdict {
 export interface ExerciseKind {
 	/** What the finished lab is, which decides how the view treats it. */
 	kind: LabKind;
+	/**
+	 * The toolchain it is built in. A kind that needs a compiler the C
+	 * builder does not have declares its own image here, and only a vault
+	 * that builds that kind ever downloads it.
+	 */
+	image: SandboxImage;
 	/** The short tag in a lab's id, such as `ctf` or `pwn`. */
 	tag: string;
 	/** What the loop calls this when it fails, e.g. "build and run". */

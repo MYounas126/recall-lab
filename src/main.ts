@@ -5,6 +5,8 @@ import { ClaudeCli } from "./claude";
 import { Tasks } from "./tasks";
 import { LabStore, hintsNeedShortening } from "./labs";
 import { Sandbox } from "./sandbox";
+import { CRACKME } from "./crackme";
+import { PWN } from "./pwn";
 import { Log } from "./log";
 import { ChallengeModal, ConfirmModal, RecallLabView, VIEW_TYPE_RECALL } from "./view";
 import { Bank, Course, Lab, Question, Tier } from "./types";
@@ -608,6 +610,7 @@ export default class RecallLabPlugin extends Plugin {
 		const course = courses.find((c) => notePath.startsWith(c.folder.replace(/\/+$/, "") + "/"));
 		if (!course) { new Notice("That note is not inside a course folder."); return null; }
 
+		const exercise = kind === "pwn" ? PWN : CRACKME;
 		const status = await this.sandbox.status();
 		if (!status.ok) {
 			new Notice(
@@ -617,16 +620,17 @@ export default class RecallLabPlugin extends Plugin {
 			);
 			return null;
 		}
-		if (!status.builder) {
-			const notice = new Notice("Building the challenge builder image. This happens once and takes a few minutes…", 0);
+		// Each kind names the toolchain it needs, and only that one is built.
+		if (!(await this.sandbox.hasImage(exercise.image))) {
+			const notice = new Notice(`Building ${exercise.image.label}. This happens once and takes a few minutes…`, 0);
 			try {
-				const built = await this.sandbox.buildImage(this.labs.buildScratch());
+				const built = await this.sandbox.buildImage(this.labs.buildScratch(), exercise.image);
 				if (built.code !== 0) {
-					this.log.error("builder image failed", { error: (built.stderr || built.stdout).slice(-400) });
-					new Notice(`Could not build the challenge builder: ${(built.stderr || built.stdout).trim().split("\n").pop()?.slice(0, 200)}`, 20000);
+					this.log.error("builder image failed", { image: exercise.image.tag, error: (built.stderr || built.stdout).slice(-400) });
+					new Notice(`Could not build ${exercise.image.label}: ${(built.stderr || built.stdout).trim().split("\n").pop()?.slice(0, 200)}`, 20000);
 					return null;
 				}
-				this.log.info("builder image built");
+				this.log.info("builder image built", { image: exercise.image.tag });
 			} finally {
 				notice.hide();
 			}
